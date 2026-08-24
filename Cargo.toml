@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+minifb = "0.28"
 mos6502 = "0.10.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

@@ -15,21 +15,20 @@ pub struct DVG {
     current_x: u16,
     current_y: u16,
 
-    global_scale_shift_count: u8,
-    global_scale_shift_left: bool,
+    global_scale: u8,
 }
 
 #[derive(Debug)]
 pub struct VectorMove {
     // Positions are global, [0, 1024)
-    source_x: u16,
-    source_y: u16,
+    pub source_x: u16,
+    pub source_y: u16,
 
-    dest_x: u16,
-    dest_y: u16,
+    pub dest_x: u16,
+    pub dest_y: u16,
 
     // 4 bit intensity level. `None` implies no drawing
-    intensity: Option<u8>,
+    pub intensity: Option<u8>,
 }
 
 enum StepResult {
@@ -48,14 +47,30 @@ impl DVG {
             stack: [0xFFFF; 4],
             current_x: 0,
             current_y: 0,
-            global_scale_shift_count: 0,
-            global_scale_shift_left: true,
+            global_scale: 0,
         }
     }
 
+    pub fn resume(&mut self) {
+        self.is_halted = false;
+        self.pc = 0;
+    }
+
+    pub fn reset(&mut self) {
+        self.pc = 0;
+        self.is_halted = true;
+        self.stack = [0xFFFF; 4];
+        self.current_x = 0;
+        self.current_y = 0;
+        self.global_scale = 0
+    }
+
     pub fn step(&mut self) -> Option<VectorMove> {
+        if self.is_halted {
+            return None;
+        }
+
         if let StepResult::Move(vector_move) = self.execute_instruction() {
-            println!("Command {vector_move:?}");
             Some(vector_move)
         } else {
             None
@@ -90,13 +105,13 @@ impl DVG {
             0x0..0xA => {
                 let read = self.read_xy(Some(opcode), instruction_word);
 
-                return StepResult::Move(self.apply_delta_move(read));
+                return StepResult::Move(self.apply_delta_move(read, opcode as u8));
             }
             // LABS: Load absolute, resetting the current emitter position
             0xA => {
                 let read = self.read_xy(None, instruction_word);
 
-                let global_scale = read.modifier;
+                self.global_scale = read.modifier;
 
                 // let vector_move = VectorMove {
                 //     source_x: self.current_x,
@@ -109,18 +124,18 @@ impl DVG {
                 self.current_x = read.x as u16;
                 self.current_y = read.y as u16;
 
-                // Convert to "i4"
-                let global_scale = ((global_scale << 4) as i8) >> 4;
+                // // Convert to "i4"
+                // let global_scale = ((global_scale << 4) as i8) >> 4;
 
-                if global_scale < 0 {
-                    // Division
-                    self.global_scale_shift_left = false;
-                    self.global_scale_shift_count = global_scale.abs() as u8;
-                } else {
-                    // Multiplication
-                    self.global_scale_shift_left = true;
-                    self.global_scale_shift_count = global_scale as u8;
-                }
+                // if global_scale < 0 {
+                //     // Division
+                //     self.global_scale_shift_left = false;
+                //     self.global_scale_shift_count = global_scale.abs() as u8;
+                // } else {
+                //     // Multiplication
+                //     self.global_scale_shift_left = true;
+                //     self.global_scale_shift_count = global_scale as u8;
+                // }
             }
             // HALT
             0xB => {
@@ -164,12 +179,14 @@ impl DVG {
 
                 let scale = (scale_factor_high << 1) | scale_factor_low;
 
-                let x = x << (scale + 1);
-                let y = y << (scale + 1);
+                // let x = x << (scale + 1);
+                // let y = y << (scale + 1);
+                let x = x << 8;
+                let y = y << 8;
 
                 let read = XYRead::new(x, x_sign, y, y_sign, intensity);
 
-                return StepResult::Move(self.apply_delta_move(read));
+                return StepResult::Move(self.apply_delta_move(read, (scale + 2) as u8));
             }
             _ => unreachable!(),
         }
@@ -190,12 +207,12 @@ impl DVG {
         let modifier = (second_word >> 12) & 0xF;
 
         // Scale directions based on opcode
-        if let Some(opcode) = opcode_shift {
-            let shift_scale = 9 - opcode;
+        // if let Some(opcode) = opcode_shift {
+        //     let shift_scale = 9 - opcode;
 
-            y = y >> shift_scale;
-            x = x >> shift_scale;
-        }
+        //     y = y >> shift_scale;
+        //     x = x >> shift_scale;
+        // }
 
         XYRead::new(x, x_sign, y, y_sign, modifier)
     }
@@ -237,26 +254,41 @@ impl DVG {
     }
 
     /// Computes the global scale bitshift as bits shifted left or right
-    fn apply_global_scale_shift(&self, value: i16) -> i16 {
-        if self.global_scale_shift_left {
-            value << self.global_scale_shift_count
-        } else {
-            value >> self.global_scale_shift_count
+    fn apply_scale(&self, value: i16, local_scale: u8) -> i16 {
+        let scale = self.global_scale.wrapping_add(local_scale) & 0xF;
+
+        if scale >= 10 {
+            return 0;
         }
+
+        let magnitude = (value.unsigned_abs() >> (9 - scale)) as i16;
+
+        if value > 0 { magnitude } else { -magnitude }
+
+        // if self.global_scale_shift_left {
+        //     value << self.global_scale_shift_count
+        // } else {
+        //     value >> self.global_scale_shift_count
+        // }
     }
 
-    fn apply_delta_move(&mut self, read: XYRead) -> VectorMove {
+    fn apply_delta_move(&mut self, read: XYRead, local_scale: u8) -> VectorMove {
         let source_x = self.current_x;
         let source_y = self.current_y;
 
-        let delta_x = self.apply_global_scale_shift(read.x);
-        let delta_y = self.apply_global_scale_shift(read.y);
+        let delta_x = self.apply_scale(read.x, local_scale);
+        let delta_y = self.apply_scale(read.y, local_scale);
 
         let x = bounded_u16_i16_add(source_x, delta_x, MAX_SCREEN_SIZE);
         let y = bounded_u16_i16_add(source_y, delta_y, MAX_SCREEN_SIZE);
 
         self.current_x = x;
         self.current_y = y;
+
+        println!(
+            "dvg: pc={:03X} gs={} local={} d=({},{}) -> ({}, {})",
+            self.pc, self.global_scale, local_scale, delta_x, delta_y, x, y
+        );
 
         VectorMove {
             source_x,
@@ -300,8 +332,9 @@ fn bounded_u16_i16_add(unsigned: u16, signed: i16, bound: u16) -> u16 {
     let sum = (unsigned as i16) + signed;
 
     let sum = if sum < 0 {
-        // Wrap against bound
-        sum + (bound as i16)
+        // // Wrap against bound
+        // sum + (bound as i16)
+        0
     } else {
         sum
     };
