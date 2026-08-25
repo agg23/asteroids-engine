@@ -1,5 +1,6 @@
 use crate::{
     dvg::{DVG, VectorMove},
+    input::GamepadInputs,
     rom::ROM,
 };
 
@@ -20,6 +21,8 @@ pub struct Bus {
     rom: [u8; 0x1800],
 
     dvg: DVG,
+
+    last_gamepad_inputs: GamepadInputs,
 }
 
 impl Bus {
@@ -33,15 +36,23 @@ impl Bus {
             ram: [0; 0x400],
             rom: rom.program,
             dvg,
+            last_gamepad_inputs: GamepadInputs::new(),
         }
     }
 
     /// Returns true if watchdog fired
-    pub fn run_steps(&mut self, step_count: usize, moves: &mut Vec<VectorMove>) -> bool {
+    pub fn run_steps(
+        &mut self,
+        step_count: usize,
+        inputs: GamepadInputs,
+        moves: &mut Vec<VectorMove>,
+    ) -> bool {
+        self.last_gamepad_inputs = inputs;
+
         self.nmi = false;
 
         for _ in 0..step_count {
-            // TODO: Find cycle time
+            // TODO: Find cycle time. This will be based on physical emitter movement
             moves.extend(self.dvg.step());
         }
 
@@ -76,24 +87,15 @@ impl mos6502::memory::Bus for Bus {
             0..0x400 => self.ram[(address & 0x3FF) as usize],
             // Clock
             0x2001 => {
-                if (self.cycle_count & CLOCK_INTERVAL) != 0 {
-                    0x80
-                } else {
-                    0x7F
-                }
+                let did_clock = (self.cycle_count & CLOCK_INTERVAL) != 0;
+                did_clock.bus_value()
             }
             // DVG Halt
-            0x2002 => {
-                if self.dvg.is_halted {
-                    0x7F
-                } else {
-                    0x80
-                }
-            }
-            // TODO: Hyperspace button
-            0x2003 => 0,
-            // TODO: Fire button
-            0x2004 => 0,
+            0x2002 => !self.dvg.is_halted.bus_value(),
+            // Hyperspace button
+            0x2003 => self.last_gamepad_inputs.hyperspace.bus_value(),
+            // Fire button
+            0x2004 => self.last_gamepad_inputs.fire.bus_value(),
             // TODO: Diagnostic step button
             0x2005 => 0,
             // TODO: Slam button
@@ -106,16 +108,16 @@ impl mos6502::memory::Bus for Bus {
             0x2401 => 0,
             // TODO: Right coin button
             0x2402 => 0,
-            // TODO: P1 start button
-            0x2403 => 0,
-            // TODO: P2 start button
-            0x2404 => 0,
-            // TODO: Thrust button
-            0x2405 => 0,
-            // TODO: Rotate right switch
-            0x2406 => 0,
-            // TODO: Rotate left switch
-            0x2407 => 0,
+            // P1 start button
+            0x2403 => self.last_gamepad_inputs.p1_start.bus_value(),
+            // P2 start button
+            0x2404 => self.last_gamepad_inputs.p2_start.bus_value(),
+            // Thrust button
+            0x2405 => self.last_gamepad_inputs.thrust.bus_value(),
+            // Rotate right switch
+            0x2406 => self.last_gamepad_inputs.rotate_right.bus_value(),
+            // Rotate left switch
+            0x2407 => self.last_gamepad_inputs.rotate_left.bus_value(),
             0x4000..0x6000 => {
                 let word = self.dvg.read_word((address - 0x4000) as usize);
 
@@ -153,5 +155,15 @@ impl mos6502::memory::Bus for Bus {
 
     fn nmi_pending(&mut self) -> bool {
         self.nmi
+    }
+}
+
+trait AsteroidsBool {
+    fn bus_value(&self) -> u8;
+}
+
+impl AsteroidsBool for bool {
+    fn bus_value(&self) -> u8 {
+        if *self { 0x80 } else { 0x7F }
     }
 }

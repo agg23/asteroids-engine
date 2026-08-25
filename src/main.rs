@@ -1,4 +1,8 @@
-use std::path::Path;
+use std::{
+    path::Path,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 use minifb::{Window, WindowOptions};
 use mos6502::{
@@ -6,11 +10,14 @@ use mos6502::{
     instruction::Nmos6502,
 };
 
-use crate::{bus::Bus, dvg::VectorMove, rom::ROM};
+use crate::{bus::Bus, dvg::VectorMove, input::GamepadInputs, rom::ROM};
 
 mod bus;
 mod dvg;
+mod input;
 mod rom;
+
+const CLOCK_SPEED: usize = 1_512_000;
 
 // 1_512_000 / 246.09
 const NMI_PERIOD: usize = 6144;
@@ -40,8 +47,12 @@ impl Machine {
         (self.cpu.cycles - current_cycles) as usize
     }
 
-    fn run_steps(&mut self, step_count: usize) {
-        if self.cpu.memory.run_steps(step_count, &mut self.moves) {
+    fn run_steps(&mut self, step_count: usize, inputs: GamepadInputs) {
+        if self
+            .cpu
+            .memory
+            .run_steps(step_count, inputs, &mut self.moves)
+        {
             // Watchdog fired
             println!("Firing watchdog");
             self.cpu.reset();
@@ -53,6 +64,7 @@ impl Machine {
         self.cpu.memory.request_nmi();
     }
 
+    #[allow(dead_code)]
     fn log(&self) {
         println!("CPU: pc={:04X}", self.cpu.registers.program_counter);
     }
@@ -68,27 +80,19 @@ fn main() {
     let mut nmi_counter = 0;
     let mut nmi_count = 0;
 
-    const SIZE: usize = 1024;
+    const SIZE: usize = 512;
     let mut window = Window::new("Asteroids", SIZE, SIZE, WindowOptions::default()).unwrap();
     let mut buffer = vec![0u32; SIZE * SIZE];
 
+    let start_instant = Instant::now();
+
+    let mut inputs = GamepadInputs::new();
+
     while window.is_open() {
         let new_cycles = machine.cpu_step();
-
-        machine.run_steps(new_cycles);
+        machine.run_steps(new_cycles, inputs.clone());
 
         nmi_counter += new_cycles;
-
-        if machine.cpu.wait_state() == WaitState::WaitingForReset {
-            panic!(
-                "CPU jammed at {:04X}",
-                machine.cpu.registers.program_counter
-            );
-        }
-
-        if machine.cpu.cycles % 50_000 == 0 {
-            machine.log();
-        }
 
         if nmi_counter >= NMI_PERIOD {
             // Request NMI to be picked up by next CPU step. It will be cleared on next machine step
@@ -100,22 +104,41 @@ fn main() {
             // Render every 4th NMI (~60Hz)
             if nmi_count % 4 == 0 {
                 buffer.fill(0);
-                for m in machine.moves.drain(..) {
-                    draw_line(&mut buffer, SIZE, &m);
+                for vector_move in machine.moves.drain(..) {
+                    draw_line(&mut buffer, SIZE, &vector_move);
                 }
                 window.update_with_buffer(&buffer, SIZE, SIZE).unwrap();
             }
+
+            inputs = GamepadInputs::read_keyboard(&window);
+
+            // Get the timestamp of the CPU, and wait until real time caches up
+            let current_cpu_time = Duration::from_nanos(
+                (machine.cpu.cycles as u128 * 1_000_000_000 / CLOCK_SPEED as u128) as u64,
+            );
+            let target_time = start_instant + current_cpu_time;
+
+            if let Some(delay) = target_time.checked_duration_since(Instant::now()) {
+                sleep(delay);
+            }
+        }
+
+        if machine.cpu.wait_state() == WaitState::WaitingForReset {
+            panic!(
+                "CPU jammed at {:04X}",
+                machine.cpu.registers.program_counter
+            );
         }
     }
 }
 
-fn draw_line(buffer: &mut [u32], size: usize, m: &dvg::VectorMove) {
-    if m.intensity.unwrap_or(0) == 0 {
+fn draw_line(buffer: &mut [u32], size: usize, vector_move: &VectorMove) {
+    if vector_move.intensity.unwrap_or(0) == 0 {
         return;
     }
 
-    let (x0, y0) = (m.source_x as f32, m.source_y as f32);
-    let (x1, y1) = (m.dest_x as f32, m.dest_y as f32);
+    let (x0, y0) = (vector_move.source_x as f32, vector_move.source_y as f32);
+    let (x1, y1) = (vector_move.dest_x as f32, vector_move.dest_y as f32);
     let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1.0) as usize;
 
     for i in 0..=steps {
