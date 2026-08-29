@@ -234,6 +234,9 @@ impl DVG {
                     dest_x: self.current_x,
                     dest_y: self.current_y,
 
+                    moving_negative_x,
+                    moving_negative_y,
+
                     intensity: self.intensity,
                 });
 
@@ -264,6 +267,9 @@ impl DVG {
 
                         dest_x: self.current_x,
                         dest_y: self.current_y,
+
+                        moving_negative_x: false,
+                        moving_negative_y: false,
 
                         intensity: 0,
                     });

@@ -10,11 +10,12 @@ use mos6502::{
     instruction::Nmos6502,
 };
 
-use crate::{bus::Bus, input::GamepadInputs, rom::ROM, types::DrawCommand};
+use crate::{bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, types::DrawCommand};
 
 mod bus;
 mod dvg;
 mod dvg_simple;
+mod gpu;
 mod input;
 mod rom;
 mod types;
@@ -85,6 +86,7 @@ fn main() {
     const SIZE: usize = 512;
     let mut window = Window::new("Asteroids", SIZE, SIZE, WindowOptions::default()).unwrap();
     let mut buffer = vec![0u32; SIZE * SIZE];
+    let mut renderer = GpuRenderer::new(SIZE as u32);
 
     let start_instant = Instant::now();
 
@@ -105,10 +107,7 @@ fn main() {
 
             // Render every 4th NMI (~60Hz)
             if nmi_count % 4 == 0 {
-                buffer.fill(0);
-                for vector_move in machine.commands.drain(..) {
-                    draw_line(&mut buffer, SIZE, &vector_move);
-                }
+                renderer.render(machine.commands.drain(..), &mut buffer);
                 window.update_with_buffer(&buffer, SIZE, SIZE).unwrap();
             }
 
@@ -134,38 +133,3 @@ fn main() {
     }
 }
 
-fn draw_line(buffer: &mut [u32], size: usize, command: &DrawCommand) {
-    if command.intensity == 0 {
-        return;
-    }
-
-    let (x0, y0) = (command.start_x as f32, command.start_y as f32);
-
-    let dx = wrapped_signed_delta(command.start_x, command.dest_x);
-    let dy = wrapped_signed_delta(command.start_y, command.dest_y);
-
-    let steps = dx.abs().max(dy.abs()).max(1.0) as usize;
-
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let x = (x0 + dx * t).rem_euclid(4096.0) as usize;
-        let y = (y0 + dy * t).rem_euclid(4096.0) as usize;
-
-        if (x | y) & 0x400 != 0 {
-            // Traveled outside of display bounds. Ignore
-            continue;
-        }
-
-        buffer[(size - 1 - y / 2) * size + x / 2] = 0xFFFFFF;
-    }
-}
-
-fn wrapped_signed_delta(from: u16, to: u16) -> f32 {
-    let forward = (to.wrapping_sub(from) & 0xFFF) as f32;
-
-    if forward <= 2048.0 {
-        forward
-    } else {
-        forward - 4096.0
-    }
-}

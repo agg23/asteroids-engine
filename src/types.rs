@@ -12,6 +12,9 @@ pub struct DrawCommand {
     pub dest_x: u16,
     pub dest_y: u16,
 
+    pub moving_negative_x: bool,
+    pub moving_negative_y: bool,
+
     // 4 bit
     pub intensity: u8,
 }
