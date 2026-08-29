@@ -9,7 +9,7 @@ use zip::ZipArchive;
 pub struct ROM {
     pub program: [u8; 0x1800],
     pub vector: [u8; 0x800],
-    pub dvg_state: [u8; 0x100],
+    pub dvg_state_prom: [u8; 0x100],
 }
 
 impl ROM {
@@ -20,7 +20,7 @@ impl ROM {
 
         let mut program = [0; 0x1800];
         let mut vector = [0; 0x800];
-        let mut dvg_state = [0; 0x100];
+        let mut dvg_state_prom = [0; 0x100];
 
         read_from_zip_file(
             &mut zip,
@@ -48,12 +48,18 @@ impl ROM {
 
         read_from_zip_file(&mut zip, &mut vector, "035127-02.np3", "Vector ROM", 0x800);
 
-        read_from_zip_file(&mut zip, &mut dvg_state, "034602-01.c8", "DVG ROM", 0x100);
+        read_from_zip_file(
+            &mut zip,
+            &mut dvg_state_prom,
+            "034602-01.c8",
+            "DVG ROM",
+            0x100,
+        );
 
         ROM {
             program,
             vector,
-            dvg_state,
+            dvg_state_prom,
         }
     }
 }

@@ -10,12 +10,14 @@ use mos6502::{
     instruction::Nmos6502,
 };
 
-use crate::{bus::Bus, dvg::VectorMove, input::GamepadInputs, rom::ROM};
+use crate::{bus::Bus, input::GamepadInputs, rom::ROM, types::DrawCommand};
 
 mod bus;
 mod dvg;
+mod dvg_simple;
 mod input;
 mod rom;
+mod types;
 
 const CLOCK_SPEED: usize = 1_512_000;
 
@@ -25,7 +27,7 @@ const NMI_PERIOD: usize = 6144;
 struct Machine {
     cpu: CPU<Bus, Nmos6502>,
 
-    moves: Vec<VectorMove>,
+    commands: Vec<DrawCommand>,
 }
 
 impl Machine {
@@ -36,7 +38,7 @@ impl Machine {
 
         Self {
             cpu,
-            moves: Vec::with_capacity(10),
+            commands: Vec::with_capacity(10),
         }
     }
 
@@ -51,7 +53,7 @@ impl Machine {
         if self
             .cpu
             .memory
-            .run_steps(step_count, inputs, &mut self.moves)
+            .run_steps(step_count, inputs, &mut self.commands)
         {
             // Watchdog fired
             println!("Firing watchdog");
@@ -104,7 +106,7 @@ fn main() {
             // Render every 4th NMI (~60Hz)
             if nmi_count % 4 == 0 {
                 buffer.fill(0);
-                for vector_move in machine.moves.drain(..) {
+                for vector_move in machine.commands.drain(..) {
                     draw_line(&mut buffer, SIZE, &vector_move);
                 }
                 window.update_with_buffer(&buffer, SIZE, SIZE).unwrap();
@@ -132,20 +134,38 @@ fn main() {
     }
 }
 
-fn draw_line(buffer: &mut [u32], size: usize, vector_move: &VectorMove) {
-    if vector_move.intensity.unwrap_or(0) == 0 {
+fn draw_line(buffer: &mut [u32], size: usize, command: &DrawCommand) {
+    if command.intensity == 0 {
         return;
     }
 
-    let (x0, y0) = (vector_move.source_x as f32, vector_move.source_y as f32);
-    let (x1, y1) = (vector_move.dest_x as f32, vector_move.dest_y as f32);
-    let steps = (x1 - x0).abs().max((y1 - y0).abs()).max(1.0) as usize;
+    let (x0, y0) = (command.start_x as f32, command.start_y as f32);
+
+    let dx = wrapped_signed_delta(command.start_x, command.dest_x);
+    let dy = wrapped_signed_delta(command.start_y, command.dest_y);
+
+    let steps = dx.abs().max(dy.abs()).max(1.0) as usize;
 
     for i in 0..=steps {
         let t = i as f32 / steps as f32;
-        let x = ((x0 + (x1 - x0) * t) as usize / 2).min(size - 1);
-        let y = ((y0 + (y1 - y0) * t) as usize / 2).min(size - 1);
+        let x = (x0 + dx * t).rem_euclid(4096.0) as usize;
+        let y = (y0 + dy * t).rem_euclid(4096.0) as usize;
 
-        buffer[(size - 1 - y) * size + x] = 0xFFFFFF;
+        if (x | y) & 0x400 != 0 {
+            // Traveled outside of display bounds. Ignore
+            continue;
+        }
+
+        buffer[(size - 1 - y / 2) * size + x / 2] = 0xFFFFFF;
+    }
+}
+
+fn wrapped_signed_delta(from: u16, to: u16) -> f32 {
+    let forward = (to.wrapping_sub(from) & 0xFFF) as f32;
+
+    if forward <= 2048.0 {
+        forward
+    } else {
+        forward - 4096.0
     }
 }

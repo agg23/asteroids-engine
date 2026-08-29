@@ -1,8 +1,4 @@
-use crate::{
-    dvg::{DVG, VectorMove},
-    input::GamepadInputs,
-    rom::ROM,
-};
+use crate::{dvg::DVG, input::GamepadInputs, rom::ROM, types::DrawCommand};
 
 // 3 kHz
 const CLOCK_PERIOD: u64 = 0x200;
@@ -13,6 +9,7 @@ const WATCHDOG_PERIOD: usize = (CLOCK_PERIOD as usize) * 0x80;
 pub struct Bus {
     /// 3kHz clock
     cycle_count: u64,
+    dvg_cycle_count: u64,
     watchdog_cycle_count: usize,
 
     nmi: bool,
@@ -27,10 +24,11 @@ pub struct Bus {
 
 impl Bus {
     pub fn new(rom: ROM) -> Self {
-        let dvg = DVG::new(rom.vector);
+        let dvg = DVG::new(rom.vector, rom.dvg_state_prom);
 
         Self {
             cycle_count: 0,
+            dvg_cycle_count: 0,
             watchdog_cycle_count: 0,
             nmi: false,
             ram: [0; 0x400],
@@ -45,19 +43,18 @@ impl Bus {
         &mut self,
         step_count: usize,
         inputs: GamepadInputs,
-        moves: &mut Vec<VectorMove>,
+        commands: &mut Vec<DrawCommand>,
     ) -> bool {
         self.last_gamepad_inputs = inputs;
 
         self.nmi = false;
 
-        for _ in 0..step_count {
-            // TODO: Find cycle time. This will be based on physical emitter movement
-            moves.extend(self.dvg.step());
-        }
-
         self.cycle_count += step_count as u64;
         self.watchdog_cycle_count += step_count;
+
+        while self.dvg_cycle_count < self.cycle_count {
+            self.dvg_cycle_count += self.dvg.step(self.dvg_cycle_count, commands) as u64;
+        }
 
         if self.watchdog_cycle_count >= WATCHDOG_PERIOD {
             // Don't need precise timing. Just completely reset it
@@ -118,12 +115,7 @@ impl mos6502::memory::Bus for Bus {
             0x2406 => self.last_gamepad_inputs.rotate_right.bus_value(),
             // Rotate left switch
             0x2407 => self.last_gamepad_inputs.rotate_left.bus_value(),
-            0x4000..0x6000 => {
-                let word = self.dvg.read_word((address - 0x4000) as usize);
-
-                // Since we're using a byte address, the low byte is always the one we want
-                (word & 0xFF) as u8
-            }
+            0x4000..0x6000 => self.dvg.read_byte((address - 0x4000) as usize),
             0x6800..=0xFFFF => self.rom[(address - 0x6800) as usize],
             _ => {
                 println!("Out of bounds read {address:04X}");
@@ -140,7 +132,7 @@ impl mos6502::memory::Bus for Bus {
             0x0..0x400 => self.ram[(address & 0x3FF) as usize] = value,
             // GODVG
             0x3000 => {
-                self.dvg.resume();
+                self.dvg.godvg();
             }
             // Watchdog reset
             0x3400 => {
