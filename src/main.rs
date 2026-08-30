@@ -18,6 +18,7 @@ mod dvg_simple;
 mod gpu;
 mod input;
 mod rom;
+mod shader;
 mod types;
 
 const CLOCK_SPEED: usize = 1_512_000;
@@ -83,7 +84,7 @@ fn main() {
     let mut nmi_counter = 0;
     let mut nmi_count = 0;
 
-    const SIZE: usize = 512;
+    const SIZE: usize = 1024;
     let mut window = Window::new("Asteroids", SIZE, SIZE, WindowOptions::default()).unwrap();
     let mut buffer = vec![0u32; SIZE * SIZE];
     let mut renderer = GpuRenderer::new(SIZE as u32);
@@ -132,4 +133,3 @@ fn main() {
         }
     }
 }
-
