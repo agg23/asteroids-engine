@@ -18,3 +18,17 @@ pub struct DrawCommand {
     // 4 bit
     pub intensity: u8,
 }
+
+#[derive(Clone)]
+pub struct BeamStep {
+    pub tick: u64,
+    /// The time the beam stays "lingering" on this step
+    pub active_ticks: u32,
+
+    // 12 bit beam position
+    pub x: u16,
+    pub y: u16,
+
+    // 4 bit
+    pub intensity: u8,
+}

@@ -1,4 +1,4 @@
-use crate::{dvg::DVG, input::GamepadInputs, rom::ROM, types::DrawCommand};
+use crate::{dvg::DVG, input::GamepadInputs, rom::ROM, types::BeamStep};
 
 // 3 kHz
 const CLOCK_PERIOD: u64 = 0x200;
@@ -43,7 +43,7 @@ impl Bus {
         &mut self,
         step_count: usize,
         inputs: GamepadInputs,
-        commands: &mut Vec<DrawCommand>,
+        commands: &mut Vec<BeamStep>,
     ) -> bool {
         self.last_gamepad_inputs = inputs;
 

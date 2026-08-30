@@ -10,7 +10,7 @@ use mos6502::{
     instruction::Nmos6502,
 };
 
-use crate::{bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, types::DrawCommand};
+use crate::{bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, types::BeamStep};
 
 mod bus;
 mod dvg;
@@ -29,7 +29,7 @@ const NMI_PERIOD: usize = 6144;
 struct Machine {
     cpu: CPU<Bus, Nmos6502>,
 
-    commands: Vec<DrawCommand>,
+    commands: Vec<BeamStep>,
 }
 
 impl Machine {

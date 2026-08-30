@@ -1,4 +1,4 @@
-use crate::types::DrawCommand;
+use crate::types::BeamStep;
 
 pub struct DVG {
     // 12 bit PC
@@ -52,7 +52,7 @@ impl DVG {
         }
     }
 
-    pub fn step(&mut self, tick_counter: u64, commands: &mut Vec<DrawCommand>) -> u16 {
+    pub fn step(&mut self, tick_counter: u64, commands: &mut Vec<BeamStep>) -> u16 {
         let latched_opcode = self.opcode;
         let latched_is_halted = self.is_halted;
 
@@ -97,7 +97,7 @@ impl DVG {
         latched_opcode: u8,
         opcode_low: bool,
         tick_counter: u64,
-        commands: &mut Vec<DrawCommand>,
+        commands: &mut Vec<BeamStep>,
     ) -> u16 {
         // state[3]: Enable (~halt)
         // state[2]: If set, data latch. If unset, DVG control
@@ -176,10 +176,20 @@ impl DVG {
                 let start_x = self.current_x;
                 let start_y = self.current_y;
 
+                let mut prev_step_tick = 0;
+
+                // // Start of beam
+                // commands.push(BeamStep {
+                //     tick: tick_counter,
+                //     x: self.current_x,
+                //     y: self.current_y,
+                //     intensity: self.intensity,
+                // });
+
                 // 12 bit counter, separate from tick_count
                 let mut counter = 0;
 
-                for _ in 0..tick_count {
+                for step_tick in 0..tick_count {
                     let mut step_x = false;
                     let mut step_y = false;
 
@@ -211,6 +221,20 @@ impl DVG {
                         }
                     }
 
+                    if step_x || step_y {
+                        // Emit the previous step
+                        commands.push(BeamStep {
+                            // Include the first tick in the calculation
+                            tick: tick_counter + (step_tick as u64) + 1,
+                            active_ticks: (step_tick - prev_step_tick) as u32,
+                            x: self.current_x,
+                            y: self.current_y,
+                            intensity: self.intensity,
+                        });
+
+                        prev_step_tick = step_tick;
+                    }
+
                     // We know that only one bit at most could have fired for each of X and Y, so we don't have to track each bit's step bool separately
                     if step_x {
                         self.current_x = step_position(self.current_x, moving_negative_x);
@@ -223,22 +247,31 @@ impl DVG {
                     counter = (counter + 1) & 0xFFF;
                 }
 
-                // Finished tracking from previous position to endpoint of the latest vector. Ready to return to the DVG state machine
-                commands.push(DrawCommand {
-                    start_tick: tick_counter,
-                    duration_ticks: tick_count,
-
-                    start_x,
-                    start_y,
-
-                    dest_x: self.current_x,
-                    dest_y: self.current_y,
-
-                    moving_negative_x,
-                    moving_negative_y,
-
+                // We've arrived at the destination
+                commands.push(BeamStep {
+                    tick: tick_counter + (tick_count as u64),
+                    active_ticks: (tick_count - prev_step_tick) as u32,
+                    x: self.current_x,
+                    y: self.current_y,
                     intensity: self.intensity,
                 });
+
+                // Finished tracking from previous position to endpoint of the latest vector. Ready to return to the DVG state machine
+                // commands.push(DrawCommand {
+                //     start_tick: tick_counter,
+                //     duration_ticks: tick_count,
+
+                //     start_x,
+                //     start_y,
+
+                //     dest_x: self.current_x,
+                //     dest_y: self.current_y,
+
+                //     moving_negative_x,
+                //     moving_negative_y,
+
+                //     intensity: self.intensity,
+                // });
 
                 // 1 cycle for this execution
                 return tick_count + 1;
@@ -258,19 +291,26 @@ impl DVG {
                     self.current_y = self.dvy;
 
                     // This snaps directly to the location, but it will have physical latency as the coils/caps can't just jump straight there
-                    commands.push(DrawCommand {
-                        start_tick: tick_counter,
-                        duration_ticks: 0,
+                    // commands.push(DrawCommand {
+                    //     start_tick: tick_counter,
+                    //     duration_ticks: 0,
 
-                        start_x,
-                        start_y,
+                    //     start_x,
+                    //     start_y,
 
-                        dest_x: self.current_x,
-                        dest_y: self.current_y,
+                    //     dest_x: self.current_x,
+                    //     dest_y: self.current_y,
 
-                        moving_negative_x: false,
-                        moving_negative_y: false,
+                    //     moving_negative_x: false,
+                    //     moving_negative_y: false,
 
+                    //     intensity: 0,
+                    // });
+                    commands.push(BeamStep {
+                        tick: tick_counter,
+                        active_ticks: 0,
+                        x: self.current_x,
+                        y: self.current_y,
                         intensity: 0,
                     });
                 }

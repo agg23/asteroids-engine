@@ -1,24 +1,26 @@
 use wgpu::{
-    Buffer, BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, Device, Extent3d,
-    FragmentState, Instance, InstanceDescriptor, LoadOp, MapMode, Operations, PollType,
-    PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout,
-    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, VertexBufferLayout,
-    VertexState, VertexStepMode, include_wgsl, vertex_attr_array,
+    BlendState, Buffer, BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites,
+    Device, Extent3d, FragmentState, Instance, InstanceDescriptor, LoadOp, MapMode, Operations,
+    PollType, PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo,
+    TexelCopyBufferLayout, Texture, TextureDescriptor, TextureDimension, TextureFormat,
+    TextureUsages, VertexBufferLayout, VertexState, VertexStepMode, include_wgsl,
+    vertex_attr_array,
 };
 
-use crate::{shader::LineInstance, types::DrawCommand};
+use crate::{shader::BeamStepInstance, types::BeamStep};
 
-#[repr(C)]
-#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
-struct Vertex {
-    // CRT emitter space, [0, 1024)
-    position: [u16; 2],
-    // DVG 4 bit intensity
-    intensity: u32,
-}
+// #[repr(C)]
+// #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+// struct Vertex {
+//     // CRT emitter space, [0, 1024)
+//     position: [u16; 2],
+//     // DVG 4 bit intensity
+//     intensity: u32,
+// }
 
-const MAX_LINES: usize = 8192;
+// const MAX_LINES: usize = 8192;
+const MAX_STEPS: usize = 32768;
 
 pub struct GpuRenderer {
     device: Device,
@@ -34,7 +36,7 @@ pub struct GpuRenderer {
     readback_buffer: Buffer,
 
     size: u32,
-    instances: Vec<LineInstance>,
+    instances: Vec<BeamStepInstance>,
 }
 
 impl GpuRenderer {
@@ -45,7 +47,8 @@ impl GpuRenderer {
         let (device, queue) = pollster::block_on(gpu_adapter.request_device(&Default::default()))
             .expect("failed to create GPU device");
 
-        let shader = device.create_shader_module(include_wgsl!("shader/line.wgsl"));
+        // let shader = device.create_shader_module(include_wgsl!("shader/line.wgsl"));
+        let shader = device.create_shader_module(include_wgsl!("shader/beam_tracing.wgsl"));
 
         let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Line pipeline"),
@@ -56,24 +59,22 @@ impl GpuRenderer {
                 compilation_options: Default::default(),
                 buffers: &[Some(VertexBufferLayout {
                     // Bytes for each line segment struct
-                    array_stride: size_of::<LineInstance>() as u64,
+                    array_stride: size_of::<BeamStepInstance>() as u64,
                     step_mode: VertexStepMode::Instance,
                     // Map fields onto WGSL @location(n) inputs
                     attributes: &vertex_attr_array![
-                        // start
-                        0 => Uint16x2,
+                        // active_ticks
+                        0 => Uint32,
                         // dest
                         1 => Uint16x2,
                         // intensity
                         2 => Uint32,
-                        // flags
-                        3 => Uint32
                     ],
                 })],
             },
             // For now, state that every 2 vectors form a line that we directly draw
             primitive: PrimitiveState {
-                topology: PrimitiveTopology::LineList,
+                topology: PrimitiveTopology::TriangleList,
                 ..Default::default()
             },
             fragment: Some(FragmentState {
@@ -83,7 +84,7 @@ impl GpuRenderer {
                 // This must match the texture def
                 targets: &[Some(ColorTargetState {
                     format: TextureFormat::Rgba8Unorm,
-                    blend: None,
+                    blend: Some(BlendState::ADDITIVE),
                     write_mask: ColorWrites::ALL,
                 })],
             }),
@@ -109,9 +110,25 @@ impl GpuRenderer {
             view_formats: &[],
         });
 
+        // let phosphor_texture = device.create_texture(&TextureDescriptor {
+        //     label: Some("Phosphor texture"),
+        //     size: Extent3d {
+        //         // TODO: This probably should supersample the resolution
+        //         width: size,
+        //         height: size,
+        //         depth_or_array_layers: 1,
+        //     },
+        //     mip_level_count: 1,
+        //     sample_count: 1,
+        //     dimension: TextureDimension::D2,
+        //     format: TextureFormat::Rgba8Unorm,
+        //     usage: TextureUsages::RENDER_ATTACHMENT,
+        //     view_formats: &[],
+        // });
+
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Vertices"),
-            size: (MAX_LINES * 2 * size_of::<Vertex>()) as u64,
+            label: Some("Beam events"),
+            size: (MAX_STEPS * size_of::<BeamStepInstance>()) as u64,
             usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -136,11 +153,11 @@ impl GpuRenderer {
         }
     }
 
-    pub fn render(&mut self, commands: impl Iterator<Item = DrawCommand>, out: &mut [u32]) {
+    pub fn render(&mut self, commands: impl Iterator<Item = BeamStep>, out: &mut [u32]) {
         self.instances.clear();
 
         self.instances
-            .extend(commands.map(|c| -> LineInstance { c.into() }));
+            .extend(commands.map(|c| -> BeamStepInstance { c.into() }));
 
         // Upload
         self.queue.write_buffer(
@@ -171,8 +188,8 @@ impl GpuRenderer {
 
             pass.set_pipeline(&self.pipeline);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            // Run across all instances with two vertices per instance
-            pass.draw(0..2, 0..self.instances.len() as u32);
+            // Run across all instances with six vertices (a quad) per instance
+            pass.draw(0..6, 0..self.instances.len() as u32);
 
             // Drop pass
         }
