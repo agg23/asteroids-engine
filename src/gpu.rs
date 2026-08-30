@@ -1,11 +1,11 @@
 use wgpu::{
-    BlendState, Buffer, BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites,
-    Device, Extent3d, FragmentState, Instance, InstanceDescriptor, LoadOp, MapMode, Operations,
-    PollType, PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment,
-    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo,
-    TexelCopyBufferLayout, Texture, TextureDescriptor, TextureDimension, TextureFormat,
-    TextureUsages, VertexBufferLayout, VertexState, VertexStepMode, include_wgsl,
-    vertex_attr_array,
+    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BlendState, Buffer,
+    BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, Device, Extent3d,
+    FragmentState, Instance, InstanceDescriptor, LoadOp, MapMode, Operations, PollType,
+    PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor,
+    RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout,
+    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    VertexBufferLayout, VertexState, VertexStepMode, include_wgsl, vertex_attr_array,
 };
 
 use crate::{shader::BeamStepInstance, types::BeamStep};
@@ -25,10 +25,21 @@ const MAX_STEPS: usize = 32768;
 pub struct GpuRenderer {
     device: Device,
     queue: Queue,
-    pipeline: RenderPipeline,
+    emu_input_pipeline: RenderPipeline,
+    decay_pipeline: RenderPipeline,
+    render_pipeline: RenderPipeline,
+
+    active_texture_index: usize,
+
+    decay_bind_group: [BindGroup; 2],
+    render_bind_group: [BindGroup; 2],
 
     // GPU render target
     target: Texture,
+
+    // Double buffered energy calculations
+    phosphor_texture: [Texture; 2],
+    phosphor_view: [TextureView; 2],
 
     vertex_buffer: Buffer,
     // Buffer for reading texture on CPU for display
@@ -48,13 +59,16 @@ impl GpuRenderer {
             .expect("failed to create GPU device");
 
         // let shader = device.create_shader_module(include_wgsl!("shader/line.wgsl"));
-        let shader = device.create_shader_module(include_wgsl!("shader/beam_tracing.wgsl"));
+        let beam_tracing_shader =
+            device.create_shader_module(include_wgsl!("shader/beam_tracing.wgsl"));
+        let decay_shader = device.create_shader_module(include_wgsl!("shader/decay.wgsl"));
+        let output_shader = device.create_shader_module(include_wgsl!("shader/output.wgsl"));
 
-        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("Line pipeline"),
+        let emu_input_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Emu input pipeline"),
             layout: None,
             vertex: VertexState {
-                module: &shader,
+                module: &beam_tracing_shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(VertexBufferLayout {
@@ -78,13 +92,74 @@ impl GpuRenderer {
                 ..Default::default()
             },
             fragment: Some(FragmentState {
-                module: &shader,
+                module: &beam_tracing_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                // This must match the texture def
+                targets: &[Some(ColorTargetState {
+                    format: TextureFormat::R16Float,
+                    blend: Some(BlendState::ADDITIVE),
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: Default::default(),
+            cache: None,
+        });
+
+        let decay_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Decay pipeline"),
+            layout: None,
+            vertex: VertexState {
+                module: &decay_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            fragment: Some(FragmentState {
+                module: &decay_shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                // This must match the texture def
+                targets: &[Some(ColorTargetState {
+                    format: TextureFormat::R16Float,
+                    blend: None,
+                    write_mask: ColorWrites::ALL,
+                })],
+            }),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: Default::default(),
+            cache: None,
+        });
+
+        let render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
+            label: Some("Render pipeline"),
+            layout: None,
+            vertex: VertexState {
+                module: &output_shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            // For now, state that every 2 vectors form a line that we directly draw
+            primitive: PrimitiveState {
+                topology: PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            fragment: Some(FragmentState {
+                module: &output_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 // This must match the texture def
                 targets: &[Some(ColorTargetState {
                     format: TextureFormat::Rgba8Unorm,
-                    blend: Some(BlendState::ADDITIVE),
+                    blend: None,
                     write_mask: ColorWrites::ALL,
                 })],
             }),
@@ -110,21 +185,52 @@ impl GpuRenderer {
             view_formats: &[],
         });
 
-        // let phosphor_texture = device.create_texture(&TextureDescriptor {
-        //     label: Some("Phosphor texture"),
-        //     size: Extent3d {
-        //         // TODO: This probably should supersample the resolution
-        //         width: size,
-        //         height: size,
-        //         depth_or_array_layers: 1,
-        //     },
-        //     mip_level_count: 1,
-        //     sample_count: 1,
-        //     dimension: TextureDimension::D2,
-        //     format: TextureFormat::Rgba8Unorm,
-        //     usage: TextureUsages::RENDER_ATTACHMENT,
-        //     view_formats: &[],
-        // });
+        let phosphor_texture = ["a", "b"].map(|label| {
+            device.create_texture(&TextureDescriptor {
+                label: Some(&format!("Phosphor energy {label}")),
+                size: Extent3d {
+                    // TODO: This probably should supersample the resolution
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: TextureDimension::D2,
+                format: TextureFormat::R16Float,
+                usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+        });
+
+        let phosphor_view = [
+            phosphor_texture[0].create_view(&Default::default()),
+            phosphor_texture[1].create_view(&Default::default()),
+        ];
+
+        // Connect phosphor texture to decay shader
+        let decay_bind_group = [0, 1].map(|i| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Decay bind group"),
+                layout: &decay_pipeline.get_bind_group_layout(0),
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&phosphor_view[i]),
+                }],
+            })
+        });
+
+        // Connect phosphor texture to render shader
+        let render_bind_group = [0, 1].map(|i| {
+            device.create_bind_group(&BindGroupDescriptor {
+                label: Some("Render bind group"),
+                layout: &render_pipeline.get_bind_group_layout(0),
+                entries: &[BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::TextureView(&phosphor_view[i]),
+                }],
+            })
+        });
 
         let vertex_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Beam events"),
@@ -144,8 +250,15 @@ impl GpuRenderer {
         Self {
             device,
             queue,
-            pipeline,
+            emu_input_pipeline,
+            decay_pipeline,
+            render_pipeline,
+            active_texture_index: 0,
+            decay_bind_group,
+            render_bind_group,
             target,
+            phosphor_texture,
+            phosphor_view,
             vertex_buffer,
             readback_buffer,
             size,
@@ -166,12 +279,66 @@ impl GpuRenderer {
             bytemuck::cast_slice(&self.instances),
         );
 
+        let read_index = self.active_texture_index;
+        let write_index = 1 - read_index;
+
         // Build encoder and submit GPU task
         let mut encoder = self.device.create_command_encoder(&Default::default());
 
+        // Run decay as the first part of the frame, rather than as the last (right before display), as we don't want
+        // to decay the newly deposited energy
         {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Actual lines"),
+                label: Some("Decay"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &self.phosphor_view[write_index],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        // Keep what we produce from the shader
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+
+            pass.set_pipeline(&self.decay_pipeline);
+            pass.set_bind_group(0, &self.decay_bind_group[read_index], &[]);
+            pass.draw(0..3, 0..1);
+
+            // Drop pass
+        }
+
+        // Apply commands from the emulator, depositing the energy
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Emu data"),
+                color_attachments: &[Some(RenderPassColorAttachment {
+                    view: &self.phosphor_view[write_index],
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: Operations {
+                        // Keep what decay just wrote
+                        load: LoadOp::Load,
+                        store: StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+
+            pass.set_pipeline(&self.emu_input_pipeline);
+            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            // Run across all instances with six vertices (a quad) per instance
+            pass.draw(0..6, 0..self.instances.len() as u32);
+
+            // Drop pass
+        }
+
+        // Draw to our output textuer
+        {
+            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+                label: Some("Render"),
                 color_attachments: &[Some(RenderPassColorAttachment {
                     view: &self.target.create_view(&Default::default()),
                     depth_slice: None,
@@ -179,17 +346,15 @@ impl GpuRenderer {
                     ops: Operations {
                         // Clear texture
                         load: LoadOp::Clear(Color::BLACK),
-                        // Keep what we produce from the shader
                         store: StoreOp::Store,
                     },
                 })],
                 ..Default::default()
             });
 
-            pass.set_pipeline(&self.pipeline);
-            pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            // Run across all instances with six vertices (a quad) per instance
-            pass.draw(0..6, 0..self.instances.len() as u32);
+            pass.set_pipeline(&self.render_pipeline);
+            pass.set_bind_group(0, &self.render_bind_group[write_index], &[]);
+            pass.draw(0..3, 0..1);
 
             // Drop pass
         }
@@ -211,6 +376,9 @@ impl GpuRenderer {
         );
 
         self.queue.submit([encoder.finish()]);
+
+        // Flip the buffers
+        self.active_texture_index = write_index;
 
         // Poll GPU until we have the result
         let slice = self.readback_buffer.slice(..);

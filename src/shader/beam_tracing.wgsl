@@ -55,9 +55,9 @@ fn vs_main(
 }
 
 @fragment
-fn fs_main(in: VsOut) -> @location(0) vec4f {
+fn fs_main(in: VsOut) -> @location(0) f32 {
     // TODO: Missing normalization
     let falloff = exp(-0.5 * dot(in.local_position, in.local_position));
-    let energy = in.energy * falloff * EXPOSURE;
-    return vec4f(energy, energy, energy, 1.0);
+    let energy = in.energy * falloff;
+    return energy;
 }
