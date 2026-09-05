@@ -4,11 +4,11 @@
 
 // TODO: What are these?
 // Gaussian sigma. Beam spot stddev
-const SIGMA: f32 = 1.5;
+const SIGMA: f32 = 0.7;
 // How far the Gaussian reaches from the center of the quad, at which point we clip to 0
 const REACH: f32 = 3.0;
-// Scale brightness so it "fits" in range
-const EXPOSURE: f32 = 0.05;
+
+const PI = radians(180.0);
 
 struct VsOut {
     @builtin(position) clip_position: vec4f,
@@ -38,7 +38,8 @@ fn vs_main(
 
     // Normalize from [0, 1024) to [-1, 1]
     // Receiving 1024 and mapping to a total range of 2, starting at -1
-    let normalized_position = vec2f(dest) / 1024.0 * 2.0 - 1.0;
+    // The + 0.5 centers the texel
+    let normalized_position = (vec2f(dest) + 0.5) / 1024.0 * 2.0 - 1.0;
 
     // Reach on one side of the Gaussian in the normalized coordinate space
     let normalized_half_reach = REACH * SIGMA * (2.0 / 1024.0);
@@ -57,7 +58,7 @@ fn vs_main(
 @fragment
 fn fs_main(in: VsOut) -> @location(0) f32 {
     // TODO: Missing normalization
-    let falloff = exp(-0.5 * dot(in.local_position, in.local_position));
+    let falloff = exp(-0.5 * dot(in.local_position, in.local_position)) / (2 * PI * SIGMA * SIGMA);
     let energy = in.energy * falloff;
     return energy;
 }
