@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use minifb::{Window, WindowOptions};
+use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use mos6502::{
     cpu::{CPU, WaitState},
     instruction::Nmos6502,
@@ -97,11 +97,44 @@ fn main() {
     let mut buffer = vec![0u32; DISPLAY_RESOLUTION * DISPLAY_RESOLUTION];
     let mut renderer = GpuRenderer::new(DISPLAY_RESOLUTION as u32);
 
-    let start_instant = Instant::now();
+    let mut start_instant = Instant::now();
 
     let mut inputs = GamepadInputs::new();
 
+    let mut prev_p_pressed = false;
+    let mut pause: Option<Instant> = None;
+
+    let mut prev_right_pressed = false;
+    let mut stepping = false;
+
     while window.is_open() {
+        let p_pressed = window.is_key_down(Key::P);
+        let right_pressed = window.is_key_down(Key::Right);
+
+        if !prev_p_pressed && p_pressed {
+            match pause {
+                Some(instant) => {
+                    pause = None;
+                    start_instant += Instant::now().duration_since(instant);
+                }
+                None => pause = Some(Instant::now()),
+            }
+        }
+
+        if !prev_right_pressed && right_pressed {
+            stepping = true;
+            pause = Some(Instant::now());
+        }
+
+        prev_right_pressed = right_pressed;
+        prev_p_pressed = p_pressed;
+
+        if !stepping && pause.is_some() {
+            sleep(Duration::from_millis(100));
+            window.update();
+            continue;
+        }
+
         let new_cycles = machine.cpu_step();
         machine.run_steps(new_cycles, inputs.clone());
 
@@ -115,11 +148,15 @@ fn main() {
             nmi_count += 1;
 
             // Render every 4th NMI (~60Hz)
-            if nmi_count % 4 == 0 {
+            if !nmi_count % 4 == 0 {
                 renderer.render(machine.commands.drain(..), &mut buffer);
                 window
                     .update_with_buffer(&buffer, DISPLAY_RESOLUTION, DISPLAY_RESOLUTION)
                     .unwrap();
+
+                if stepping {
+                    stepping = false;
+                }
             }
 
             inputs = GamepadInputs::read_keyboard(&window);
