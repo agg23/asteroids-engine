@@ -10,7 +10,10 @@ use mos6502::{
     instruction::Nmos6502,
 };
 
-use crate::{bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, types::BeamStep};
+use crate::{
+    bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, shader::DISPLAY_RESOLUTION,
+    types::BeamStep,
+};
 
 mod bus;
 mod dvg;
@@ -84,10 +87,15 @@ fn main() {
     let mut nmi_counter = 0;
     let mut nmi_count = 0;
 
-    const SIZE: usize = 1024;
-    let mut window = Window::new("Asteroids", SIZE, SIZE, WindowOptions::default()).unwrap();
-    let mut buffer = vec![0u32; SIZE * SIZE];
-    let mut renderer = GpuRenderer::new(SIZE as u32);
+    let mut window = Window::new(
+        "Asteroids",
+        DISPLAY_RESOLUTION,
+        DISPLAY_RESOLUTION,
+        WindowOptions::default(),
+    )
+    .unwrap();
+    let mut buffer = vec![0u32; DISPLAY_RESOLUTION * DISPLAY_RESOLUTION];
+    let mut renderer = GpuRenderer::new(DISPLAY_RESOLUTION as u32);
 
     let start_instant = Instant::now();
 
@@ -109,7 +117,9 @@ fn main() {
             // Render every 4th NMI (~60Hz)
             if nmi_count % 4 == 0 {
                 renderer.render(machine.commands.drain(..), &mut buffer);
-                window.update_with_buffer(&buffer, SIZE, SIZE).unwrap();
+                window
+                    .update_with_buffer(&buffer, DISPLAY_RESOLUTION, DISPLAY_RESOLUTION)
+                    .unwrap();
             }
 
             inputs = GamepadInputs::read_keyboard(&window);

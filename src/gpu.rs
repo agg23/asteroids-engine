@@ -5,10 +5,13 @@ use wgpu::{
     PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor,
     RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout,
     Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    VertexBufferLayout, VertexState, VertexStepMode, include_wgsl, vertex_attr_array,
+    VertexBufferLayout, VertexState, VertexStepMode, vertex_attr_array,
 };
 
-use crate::{shader::BeamStepInstance, types::BeamStep};
+use crate::{
+    shader::{BeamStepInstance, RENDER_RESOLUTION, Shader},
+    types::BeamStep,
+};
 
 // #[repr(C)]
 // #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -51,7 +54,7 @@ pub struct GpuRenderer {
 }
 
 impl GpuRenderer {
-    pub fn new(size: u32) -> Self {
+    pub fn new(output_size: u32) -> Self {
         let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
         let gpu_adapter = pollster::block_on(instance.request_adapter(&Default::default()))
             .expect("no GPU adapter found");
@@ -59,10 +62,9 @@ impl GpuRenderer {
             .expect("failed to create GPU device");
 
         // let shader = device.create_shader_module(include_wgsl!("shader/line.wgsl"));
-        let beam_tracing_shader =
-            device.create_shader_module(include_wgsl!("shader/beam_tracing.wgsl"));
-        let decay_shader = device.create_shader_module(include_wgsl!("shader/decay.wgsl"));
-        let output_shader = device.create_shader_module(include_wgsl!("shader/output.wgsl"));
+        let beam_tracing_shader = Shader::new(&device, include_str!("shader/beam_tracing.wgsl"));
+        let decay_shader = Shader::new(&device, include_str!("shader/decay.wgsl"));
+        let output_shader = Shader::new(&device, include_str!("shader/output.wgsl"));
 
         let emu_input_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Emu input pipeline"),
@@ -172,8 +174,8 @@ impl GpuRenderer {
         let target = device.create_texture(&TextureDescriptor {
             label: Some("Render texture"),
             size: Extent3d {
-                width: size,
-                height: size,
+                width: output_size,
+                height: output_size,
                 depth_or_array_layers: 1,
             },
             mip_level_count: 1,
@@ -189,9 +191,8 @@ impl GpuRenderer {
             device.create_texture(&TextureDescriptor {
                 label: Some(&format!("Phosphor energy {label}")),
                 size: Extent3d {
-                    // TODO: This probably should supersample the resolution
-                    width: size,
-                    height: size,
+                    width: RENDER_RESOLUTION as u32,
+                    height: RENDER_RESOLUTION as u32,
                     depth_or_array_layers: 1,
                 },
                 mip_level_count: 1,
@@ -239,10 +240,10 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        assert_eq!((size * 4) % 256, 0, "Rows must be 256 byte aligned");
+        assert_eq!((output_size * 4) % 256, 0, "Rows must be 256 byte aligned");
         let readback_buffer = device.create_buffer(&BufferDescriptor {
             label: Some("Readback"),
-            size: (size * size * 4) as u64,
+            size: (output_size * output_size * 4) as u64,
             usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
@@ -261,7 +262,7 @@ impl GpuRenderer {
             phosphor_view,
             vertex_buffer,
             readback_buffer,
-            size,
+            size: output_size,
             instances: Vec::new(),
         }
     }

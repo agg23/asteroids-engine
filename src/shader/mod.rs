@@ -1,4 +1,10 @@
+use wgpu::{Device, ShaderModule, ShaderModuleDescriptor, ShaderSource};
+
 use crate::types::{BeamStep, DrawCommand};
+
+pub const DISPLAY_RESOLUTION: usize = 1024;
+pub const SUPERSAMPLE_MULTIPLIER: usize = 4;
+pub const RENDER_RESOLUTION: usize = DISPLAY_RESOLUTION * SUPERSAMPLE_MULTIPLIER;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -60,5 +66,24 @@ impl From<BeamStep> for BeamStepInstance {
             intensity: value.intensity as u32,
             // padding: 0,
         }
+    }
+}
+
+pub struct Shader;
+
+impl Shader {
+    pub fn new(device: &Device, contents: &str) -> ShaderModule {
+        let injected_constants = format!(
+            "const DISPLAY_RESOLUTION: f32 = {DISPLAY_RESOLUTION}.0;
+            const SUPERSAMPLE_MULTIPLIER: i32 = {SUPERSAMPLE_MULTIPLIER};"
+        );
+
+        // WGSL doesn't care about declaration order, and prepending would mess up line numbers
+        let contents = format!("{contents}\n{injected_constants}");
+
+        device.create_shader_module(ShaderModuleDescriptor {
+            label: None,
+            source: ShaderSource::Wgsl(contents.into()),
+        })
     }
 }
