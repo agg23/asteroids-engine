@@ -123,14 +123,16 @@ fn main() {
 
         if !prev_right_pressed && right_pressed {
             stepping = true;
-            pause = Some(Instant::now());
+            if pause.is_none() {
+                pause = Some(Instant::now());
+            }
         }
 
         prev_right_pressed = right_pressed;
         prev_p_pressed = p_pressed;
 
         if !stepping && pause.is_some() {
-            sleep(Duration::from_millis(100));
+            sleep(Duration::from_millis(16));
             window.update();
             continue;
         }
@@ -148,7 +150,7 @@ fn main() {
             nmi_count += 1;
 
             // Render every 4th NMI (~60Hz)
-            if !nmi_count % 4 == 0 {
+            if nmi_count % 4 == 0 {
                 renderer.render(machine.commands.drain(..), &mut buffer);
                 window
                     .update_with_buffer(&buffer, DISPLAY_RESOLUTION, DISPLAY_RESOLUTION)
