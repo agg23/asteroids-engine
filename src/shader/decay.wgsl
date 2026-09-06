@@ -1,5 +1,5 @@
 // Decay all energy in the phosphor
-const DECAY: f32 = 0.5;
+const DECAY: f32 = 0.0;
 
 @group(0) @binding(0) var state_in: texture_2d<f32>;
 

@@ -1,7 +1,12 @@
 // Reads from the phosphor texture and renders it
 
 // Scale brightness so it "fits" in range
-const EXPOSURE: f32 = 1.0;
+const EXPOSURE: f32 = 8.0;
+
+// Phosphor emission chromacity in sRGB, normalized to max channel brightness at 1.0
+// Asteroids uses 9300k as its whitepoint, which is at chromacity 0.283, 0.298. Mapping from chromacity to sRGB results in vec3f(0.839193, 1.014020, 1.335080). Normalizing by field produces:
+// const PHOSPHOR_TINT: vec3f = vec3f(0.629, 0.760, 1.000);
+const PHOSPHOR_TINT: vec3f = vec3f(0.35, 0.55, 1.0);
 
 @vertex
 fn vs_main(
@@ -31,12 +36,14 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // Average energy based on supersampling ratio
     energy = energy / f32(SUPERSAMPLE_MULTIPLIER * SUPERSAMPLE_MULTIPLIER);
 
+    let color = energy * PHOSPHOR_TINT;
+
     // Perform tonemapping
     // The probability of a Poisson distributed electron emission hitting a single eye "element" is:
-    let probabilty_of_impact = 1.0 - exp(-EXPOSURE * energy);
+    let probabilty_of_impact = 1.0 - exp(-EXPOSURE * color);
 
     // Apply gamma normalization (at 2.2)
-    let output = pow(probabilty_of_impact, 1.0/2.2);
+    let output = pow(probabilty_of_impact, vec3f(1.0/2.2));
 
-    return vec4f(output, output, output, 1.0);
+    return vec4f(output, 1.0);
 }
