@@ -27,7 +27,7 @@ mod types;
 const CLOCK_SPEED: usize = 1_512_000;
 
 // 1_512_000 / 246.09
-const NMI_PERIOD: usize = 6144;
+const NMI_PERIOD_TICKS: usize = 6144;
 
 struct Machine {
     cpu: CPU<Bus, Nmos6502>,
@@ -87,6 +87,8 @@ fn main() {
     let mut nmi_counter = 0;
     let mut nmi_count = 0;
 
+    let mut last_frame_ticks = 0;
+
     let mut window = Window::new(
         "Asteroids",
         DISPLAY_RESOLUTION,
@@ -142,16 +144,18 @@ fn main() {
 
         nmi_counter += new_cycles;
 
-        if nmi_counter >= NMI_PERIOD {
+        if nmi_counter >= NMI_PERIOD_TICKS {
             // Request NMI to be picked up by next CPU step. It will be cleared on next machine step
             machine.request_nmi();
 
-            nmi_counter -= NMI_PERIOD;
+            nmi_counter -= NMI_PERIOD_TICKS;
             nmi_count += 1;
 
             // Render every 4th NMI (~60Hz)
             if nmi_count % 4 == 0 {
-                renderer.render(machine.commands.drain(..), &mut buffer);
+                renderer.render(machine.commands.drain(..), last_frame_ticks, &mut buffer);
+
+                last_frame_ticks = machine.cpu.cycles;
                 window
                     .update_with_buffer(&buffer, DISPLAY_RESOLUTION, DISPLAY_RESOLUTION)
                     .unwrap();

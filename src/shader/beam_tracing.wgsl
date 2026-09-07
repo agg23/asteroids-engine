@@ -25,8 +25,9 @@ fn vs_main(
     // Layout declared in BeamStepInstance
     // @location(0) ticks: u64,
     @location(0) active_ticks: u32,
-    @location(1) dest: vec2<u32>,
-    @location(2) intensity: u32,
+    @location(1) ticks_until_end_of_frame: u32,
+    @location(2) dest: vec2<u32>,
+    @location(3) intensity: u32,
     // @location(3) _padding: u32,
 ) -> VsOut {
     // The quad covering [-1, 1]

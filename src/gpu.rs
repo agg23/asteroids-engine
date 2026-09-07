@@ -9,7 +9,7 @@ use wgpu::{
 };
 
 use crate::{
-    shader::{BeamStepInstance, RENDER_RESOLUTION, Shader},
+    shader::{BeamStepInstance, RENDER_RESOLUTION, Shader, SharedUniforms},
     types::BeamStep,
 };
 
@@ -43,6 +43,8 @@ pub struct GpuRenderer {
     // Double buffered energy calculations
     phosphor_texture: [Texture; 2],
     phosphor_view: [TextureView; 2],
+
+    uniform_buffer: Buffer,
 
     vertex_buffer: Buffer,
     // Buffer for reading texture on CPU for display
@@ -81,10 +83,12 @@ impl GpuRenderer {
                     attributes: &vertex_attr_array![
                         // active_ticks
                         0 => Uint32,
+                        // ticks_remaining_in_frame
+                        1 => Uint32,
                         // dest
-                        1 => Uint16x2,
+                        2 => Uint16x2,
                         // intensity
-                        2 => Uint32,
+                        3 => Uint32,
                     ],
                 })],
             },
@@ -209,15 +213,28 @@ impl GpuRenderer {
             phosphor_texture[1].create_view(&Default::default()),
         ];
 
+        let uniform_buffer = device.create_buffer(&BufferDescriptor {
+            label: Some("Shared uniforms"),
+            size: size_of::<SharedUniforms>() as u64,
+            usage: BufferUsages::UNIFORM | BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
         // Connect phosphor texture to decay shader
         let decay_bind_group = [0, 1].map(|i| {
             device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Decay bind group"),
                 layout: &decay_pipeline.get_bind_group_layout(0),
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&phosphor_view[i]),
-                }],
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&phosphor_view[i]),
+                    },
+                    // BindGroupEntry {
+                    //     binding: 1,
+                    //     resource: uniform_buffer.as_entire_binding(),
+                    // },
+                ],
             })
         });
 
@@ -226,10 +243,16 @@ impl GpuRenderer {
             device.create_bind_group(&BindGroupDescriptor {
                 label: Some("Render bind group"),
                 layout: &render_pipeline.get_bind_group_layout(0),
-                entries: &[BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&phosphor_view[i]),
-                }],
+                entries: &[
+                    BindGroupEntry {
+                        binding: 0,
+                        resource: BindingResource::TextureView(&phosphor_view[i]),
+                    },
+                    // BindGroupEntry {
+                    //     binding: 1,
+                    //     resource: uniform_buffer.as_entire_binding(),
+                    // },
+                ],
             })
         });
 
@@ -260,6 +283,7 @@ impl GpuRenderer {
             target,
             phosphor_texture,
             phosphor_view,
+            uniform_buffer,
             vertex_buffer,
             readback_buffer,
             size: output_size,
@@ -267,11 +291,22 @@ impl GpuRenderer {
         }
     }
 
-    pub fn render(&mut self, commands: impl Iterator<Item = BeamStep>, out: &mut [u32]) {
+    pub fn render(
+        &mut self,
+        commands: impl Iterator<Item = BeamStep>,
+        next_frame_tick_count: u64,
+        out: &mut [u32],
+    ) {
+        self.queue.write_buffer(
+            &self.uniform_buffer,
+            0,
+            bytemuck::bytes_of(&SharedUniforms::new(next_frame_tick_count)),
+        );
+
         self.instances.clear();
 
         self.instances
-            .extend(commands.map(|c| -> BeamStepInstance { c.into() }));
+            .extend(commands.map(|command| BeamStepInstance::new(command, next_frame_tick_count)));
 
         // Upload
         self.queue.write_buffer(

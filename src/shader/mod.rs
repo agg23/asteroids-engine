@@ -48,6 +48,8 @@ impl From<DrawCommand> for LineInstance {
 pub struct BeamStepInstance {
     // pub tick: u64,
     pub active_ticks: u32,
+    /// Time in ticks from step to the DVG's scheduled frame time
+    pub ticks_until_end_of_frame: u32,
 
     // DVG 12-bit coordinates
     pub dest: [u16; 2],
@@ -57,14 +59,33 @@ pub struct BeamStepInstance {
     // pub padding: u32,
 }
 
-impl From<BeamStep> for BeamStepInstance {
-    fn from(value: BeamStep) -> Self {
+impl BeamStepInstance {
+    pub fn new(value: BeamStep, next_frame_tick_count: u64) -> Self {
         Self {
             // tick: value.tick,
             active_ticks: value.active_ticks,
+            ticks_until_end_of_frame: (next_frame_tick_count - value.tick) as u32,
             dest: [value.x, value.y],
             intensity: value.intensity as u32,
             // padding: 0,
+        }
+    }
+}
+
+/// Per frame values sent to the GPU
+#[repr(C)]
+#[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct SharedUniforms {
+    pub frame_ticks: u64,
+    // Padd to 16 bytes
+    pub _pad: [u32; 2],
+}
+
+impl SharedUniforms {
+    pub fn new(frame_ticks: u64) -> Self {
+        SharedUniforms {
+            frame_ticks,
+            _pad: [0; 2],
         }
     }
 }
