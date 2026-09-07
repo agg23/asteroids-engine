@@ -1,17 +1,29 @@
 use std::{
     path::Path,
+    sync::Arc,
     thread::sleep,
     time::{Duration, Instant},
 };
 
-use minifb::{Key, KeyRepeat, Window, WindowOptions};
 use mos6502::{
     cpu::{CPU, WaitState},
     instruction::Nmos6502,
 };
+use winit::{
+    application::ApplicationHandler,
+    dpi::PhysicalSize,
+    event::{ElementState, WindowEvent},
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    keyboard::{KeyCode, PhysicalKey},
+    window::{Window, WindowId},
+};
 
 use crate::{
-    bus::Bus, gpu::GpuRenderer, input::GamepadInputs, rom::ROM, shader::DISPLAY_RESOLUTION,
+    bus::Bus,
+    gpu::GpuRenderer,
+    input::{GamepadInputs, KeyState},
+    rom::ROM,
+    shader::DISPLAY_RESOLUTION,
     types::BeamStep,
 };
 
@@ -77,112 +89,208 @@ impl Machine {
     }
 }
 
+struct App {
+    machine: Machine,
+    // Owns the surface, so it can't exist until we have a window
+    renderer: Option<GpuRenderer>,
+
+    window: Option<Arc<Window>>,
+
+    keys: KeyState,
+    inputs: GamepadInputs,
+
+    nmi_counter: usize,
+    nmi_count: usize,
+    last_frame_ticks: u64,
+
+    start_instant: Instant,
+    pause: Option<Instant>,
+    stepping: bool,
+}
+
+impl App {
+    fn new(machine: Machine) -> Self {
+        Self {
+            machine,
+            renderer: None,
+
+            window: None,
+
+            keys: KeyState::new(),
+            inputs: GamepadInputs::new(),
+
+            nmi_counter: 0,
+            nmi_count: 0,
+            last_frame_ticks: 0,
+
+            start_instant: Instant::now(),
+            pause: None,
+            stepping: false,
+        }
+    }
+
+    fn toggle_pause(&mut self) {
+        match self.pause {
+            Some(instant) => {
+                self.pause = None;
+                // Don't count wall time spent paused against the CPU clock
+                self.start_instant += Instant::now().duration_since(instant);
+            }
+            None => self.pause = Some(Instant::now()),
+        }
+    }
+
+    fn step_frame(&mut self) {
+        self.stepping = true;
+        if self.pause.is_none() {
+            self.pause = Some(Instant::now());
+        }
+    }
+
+    fn draw(&mut self) {
+        let Some(renderer) = self.renderer.as_mut() else {
+            return;
+        };
+
+        renderer.render(self.machine.commands.drain(..), self.last_frame_ticks);
+
+        self.last_frame_ticks = self.machine.cpu.cycles;
+    }
+
+    fn run_until_frame(&mut self) {
+        loop {
+            let new_cycles = self.machine.cpu_step();
+            self.machine.run_steps(new_cycles, self.inputs.clone());
+
+            if self.machine.cpu.wait_state() == WaitState::WaitingForReset {
+                panic!(
+                    "CPU jammed at {:04X}",
+                    self.machine.cpu.registers.program_counter
+                );
+            }
+
+            self.nmi_counter += new_cycles;
+
+            if self.nmi_counter < NMI_PERIOD_TICKS {
+                continue;
+            }
+
+            // Request NMI to be picked up by next CPU step. It will be cleared on next machine step
+            self.machine.request_nmi();
+
+            self.nmi_counter -= NMI_PERIOD_TICKS;
+            self.nmi_count += 1;
+
+            // Render every 4th NMI (~60Hz)
+            let did_render = self.nmi_count % 4 == 0;
+
+            if did_render {
+                self.draw();
+                self.stepping = false;
+            }
+
+            self.inputs = self.keys.current_gamepad();
+
+            // Get the timestamp of the CPU, and wait until real time catches up
+            let current_cpu_time = Duration::from_nanos(
+                (self.machine.cpu.cycles as u128 * 1_000_000_000 / CLOCK_SPEED as u128) as u64,
+            );
+            let target_time = self.start_instant + current_cpu_time;
+
+            if let Some(delay) = target_time.checked_duration_since(Instant::now()) {
+                sleep(delay);
+            }
+
+            if did_render {
+                return;
+            }
+        }
+    }
+}
+
+impl ApplicationHandler for App {
+    // Don't create any graphics contexts/windows until we receive our first resumed
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.window.is_some() {
+            return;
+        }
+
+        // Should respect DPI/pixel scale
+        let size = PhysicalSize::new(DISPLAY_RESOLUTION as u32, DISPLAY_RESOLUTION as u32);
+
+        let window = Arc::new(
+            event_loop
+                .create_window(
+                    Window::default_attributes()
+                        .with_title("Asteroids")
+                        .with_inner_size(size)
+                        .with_resizable(false),
+                )
+                .unwrap(),
+        );
+
+        self.renderer = Some(GpuRenderer::new(Arc::clone(&window)));
+        self.window = Some(window);
+    }
+
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        match event {
+            WindowEvent::Focused(false) => self.keys.clear(),
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(size) => {
+                // Resized events can come regardless of whether or not we allow the window to resize, so do something in that scenario
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.resize(size.width, size.height);
+                }
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                let PhysicalKey::Code(code) = event.physical_key else {
+                    return;
+                };
+
+                let pressed = event.state == ElementState::Pressed;
+                self.keys.set(code, pressed);
+
+                // winit gives us real transitions, so no manual edge detection
+                if pressed && !event.repeat {
+                    match code {
+                        KeyCode::KeyP => self.toggle_pause(),
+                        KeyCode::ArrowRight => self.step_frame(),
+                        KeyCode::Escape => event_loop.exit(),
+                        _ => {}
+                    }
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.present_last();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if self.pause.is_some() && !self.stepping {
+            event_loop.set_control_flow(ControlFlow::Wait);
+            return;
+        }
+
+        event_loop.set_control_flow(ControlFlow::Poll);
+        self.run_until_frame();
+    }
+}
+
 fn main() {
     let rom = ROM::load_mame(Path::new("/Users/adam/code/mame/roms/asteroid.zip"));
 
     println!("Loaded ROM");
 
-    let mut machine = Machine::new(rom);
+    let machine = Machine::new(rom);
 
-    let mut nmi_counter = 0;
-    let mut nmi_count = 0;
+    let event_loop = EventLoop::new().unwrap();
+    event_loop.set_control_flow(ControlFlow::Poll);
 
-    let mut last_frame_ticks = 0;
-
-    let mut window = Window::new(
-        "Asteroids",
-        DISPLAY_RESOLUTION,
-        DISPLAY_RESOLUTION,
-        WindowOptions::default(),
-    )
-    .unwrap();
-    let mut buffer = vec![0u32; DISPLAY_RESOLUTION * DISPLAY_RESOLUTION];
-    let mut renderer = GpuRenderer::new(DISPLAY_RESOLUTION as u32);
-
-    let mut start_instant = Instant::now();
-
-    let mut inputs = GamepadInputs::new();
-
-    let mut prev_p_pressed = false;
-    let mut pause: Option<Instant> = None;
-
-    let mut prev_right_pressed = false;
-    let mut stepping = false;
-
-    while window.is_open() {
-        let p_pressed = window.is_key_down(Key::P);
-        let right_pressed = window.is_key_down(Key::Right);
-
-        if !prev_p_pressed && p_pressed {
-            match pause {
-                Some(instant) => {
-                    pause = None;
-                    start_instant += Instant::now().duration_since(instant);
-                }
-                None => pause = Some(Instant::now()),
-            }
-        }
-
-        if !prev_right_pressed && right_pressed {
-            stepping = true;
-            if pause.is_none() {
-                pause = Some(Instant::now());
-            }
-        }
-
-        prev_right_pressed = right_pressed;
-        prev_p_pressed = p_pressed;
-
-        if !stepping && pause.is_some() {
-            sleep(Duration::from_millis(16));
-            window.update();
-            continue;
-        }
-
-        let new_cycles = machine.cpu_step();
-        machine.run_steps(new_cycles, inputs.clone());
-
-        nmi_counter += new_cycles;
-
-        if nmi_counter >= NMI_PERIOD_TICKS {
-            // Request NMI to be picked up by next CPU step. It will be cleared on next machine step
-            machine.request_nmi();
-
-            nmi_counter -= NMI_PERIOD_TICKS;
-            nmi_count += 1;
-
-            // Render every 4th NMI (~60Hz)
-            if nmi_count % 4 == 0 {
-                renderer.render(machine.commands.drain(..), last_frame_ticks, &mut buffer);
-
-                last_frame_ticks = machine.cpu.cycles;
-                window
-                    .update_with_buffer(&buffer, DISPLAY_RESOLUTION, DISPLAY_RESOLUTION)
-                    .unwrap();
-
-                if stepping {
-                    stepping = false;
-                }
-            }
-
-            inputs = GamepadInputs::read_keyboard(&window);
-
-            // Get the timestamp of the CPU, and wait until real time caches up
-            let current_cpu_time = Duration::from_nanos(
-                (machine.cpu.cycles as u128 * 1_000_000_000 / CLOCK_SPEED as u128) as u64,
-            );
-            let target_time = start_instant + current_cpu_time;
-
-            if let Some(delay) = target_time.checked_duration_since(Instant::now()) {
-                sleep(delay);
-            }
-        }
-
-        if machine.cpu.wait_state() == WaitState::WaitingForReset {
-            panic!(
-                "CPU jammed at {:04X}",
-                machine.cpu.registers.program_counter
-            );
-        }
-    }
+    let mut app = App::new(machine);
+    event_loop.run_app(&mut app).unwrap();
 }

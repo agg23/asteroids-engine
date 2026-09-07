@@ -1,4 +1,46 @@
-use minifb::{Key, Window};
+use std::collections::HashSet;
+
+use winit::keyboard::KeyCode;
+
+pub struct KeyState {
+    held: HashSet<KeyCode>,
+}
+
+impl KeyState {
+    pub fn new() -> Self {
+        Self {
+            held: HashSet::new(),
+        }
+    }
+
+    pub fn set(&mut self, key: KeyCode, pressed: bool) {
+        if pressed {
+            self.held.insert(key);
+        } else {
+            self.held.remove(&key);
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.held.clear();
+    }
+
+    pub fn is_key_down(&self, key: KeyCode) -> bool {
+        self.held.contains(&key)
+    }
+
+    pub fn current_gamepad(&self) -> GamepadInputs {
+        GamepadInputs {
+            thrust: self.is_key_down(KeyCode::KeyW),
+            rotate_left: self.is_key_down(KeyCode::KeyA),
+            rotate_right: self.is_key_down(KeyCode::KeyD),
+            fire: self.is_key_down(KeyCode::Space),
+            hyperspace: self.is_key_down(KeyCode::ShiftLeft),
+            p1_start: self.is_key_down(KeyCode::Digit1),
+            p2_start: self.is_key_down(KeyCode::Digit2),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct GamepadInputs {
@@ -27,18 +69,6 @@ impl GamepadInputs {
             fire: false,
 
             hyperspace: false,
-        }
-    }
-
-    pub fn read_keyboard(window: &Window) -> Self {
-        Self {
-            thrust: window.is_key_down(Key::W),
-            rotate_left: window.is_key_down(Key::A),
-            rotate_right: window.is_key_down(Key::D),
-            fire: window.is_key_down(Key::Space),
-            hyperspace: window.is_key_down(Key::LeftShift),
-            p1_start: window.is_key_down(Key::Key1),
-            p2_start: window.is_key_down(Key::Key2),
         }
     }
 }

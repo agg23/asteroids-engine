@@ -1,12 +1,16 @@
+use std::sync::Arc;
+
 use wgpu::{
     BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BlendState, Buffer,
-    BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, Device, Extent3d,
-    FragmentState, Instance, InstanceDescriptor, LoadOp, MapMode, Operations, PollType,
-    PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor,
-    RenderPipeline, RenderPipelineDescriptor, StoreOp, TexelCopyBufferInfo, TexelCopyBufferLayout,
-    Texture, TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
-    VertexBufferLayout, VertexState, VertexStepMode, vertex_attr_array,
+    BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoder,
+    CurrentSurfaceTexture, Device, Extent3d, FragmentState, Instance, InstanceDescriptor, LoadOp,
+    Operations, PresentMode, PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment,
+    RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, StoreOp,
+    Surface, SurfaceColorSpace, SurfaceConfiguration, SurfaceTexture, Texture, TextureDescriptor,
+    TextureDimension, TextureFormat, TextureUsages, TextureView, VertexBufferLayout, VertexState,
+    VertexStepMode, vertex_attr_array,
 };
+use winit::window::Window;
 
 use crate::{
     shader::{BeamStepInstance, RENDER_RESOLUTION, Shader, SharedUniforms},
@@ -26,6 +30,9 @@ use crate::{
 const MAX_STEPS: usize = 32768;
 
 pub struct GpuRenderer {
+    surface: Surface<'static>,
+    surface_config: SurfaceConfiguration,
+
     device: Device,
     queue: Queue,
     emu_input_pipeline: RenderPipeline,
@@ -37,9 +44,6 @@ pub struct GpuRenderer {
     decay_bind_group: [BindGroup; 2],
     render_bind_group: [BindGroup; 2],
 
-    // GPU render target
-    target: Texture,
-
     // Double buffered energy calculations
     phosphor_texture: [Texture; 2],
     phosphor_view: [TextureView; 2],
@@ -47,21 +51,50 @@ pub struct GpuRenderer {
     uniform_buffer: Buffer,
 
     vertex_buffer: Buffer,
-    // Buffer for reading texture on CPU for display
-    // TODO: Remove and convert to GPU direct rendering
-    readback_buffer: Buffer,
 
-    size: u32,
     instances: Vec<BeamStepInstance>,
 }
 
 impl GpuRenderer {
-    pub fn new(output_size: u32) -> Self {
+    pub fn new(window: Arc<Window>) -> Self {
         let instance = Instance::new(InstanceDescriptor::new_without_display_handle());
-        let gpu_adapter = pollster::block_on(instance.request_adapter(&Default::default()))
-            .expect("no GPU adapter found");
+
+        let surface = instance
+            .create_surface(Arc::clone(&window))
+            .expect("failed to create surface");
+
+        let gpu_adapter = pollster::block_on(instance.request_adapter(&RequestAdapterOptions {
+            compatible_surface: Some(&surface),
+            ..Default::default()
+        }))
+        .expect("no GPU adapter found");
         let (device, queue) = pollster::block_on(gpu_adapter.request_device(&Default::default()))
             .expect("failed to create GPU device");
+
+        let caps = surface.get_capabilities(&gpu_adapter);
+
+        // Prefer sRGB
+        let surface_format = caps
+            .formats
+            .iter()
+            .copied()
+            .find(|format| format.is_srgb())
+            .unwrap_or(caps.formats[0]);
+
+        let physical = window.inner_size();
+        let surface_config = SurfaceConfiguration {
+            usage: TextureUsages::RENDER_ATTACHMENT,
+            format: surface_format,
+            // Auto resolves to plain sRGB for an 8 bit format
+            color_space: SurfaceColorSpace::Auto,
+            width: physical.width.max(1),
+            height: physical.height.max(1),
+            present_mode: PresentMode::AutoNoVsync,
+            alpha_mode: caps.alpha_modes[0],
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+        surface.configure(&device, &surface_config);
 
         // let shader = device.create_shader_module(include_wgsl!("shader/line.wgsl"));
         let beam_tracing_shader = Shader::new(&device, include_str!("shader/beam_tracing.wgsl"));
@@ -162,9 +195,9 @@ impl GpuRenderer {
                 module: &output_shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                // This must match the texture def
+                // This must match the surface we present to
                 targets: &[Some(ColorTargetState {
-                    format: TextureFormat::Rgba8Unorm,
+                    format: surface_format,
                     blend: None,
                     write_mask: ColorWrites::ALL,
                 })],
@@ -173,22 +206,6 @@ impl GpuRenderer {
             multisample: Default::default(),
             multiview_mask: Default::default(),
             cache: None,
-        });
-
-        let target = device.create_texture(&TextureDescriptor {
-            label: Some("Render texture"),
-            size: Extent3d {
-                width: output_size,
-                height: output_size,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            format: TextureFormat::Rgba8Unorm,
-            // Draw into it and read it out
-            usage: TextureUsages::RENDER_ATTACHMENT | TextureUsages::COPY_SRC,
-            view_formats: &[],
         });
 
         let phosphor_texture = ["a", "b"].map(|label| {
@@ -263,15 +280,9 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        assert_eq!((output_size * 4) % 256, 0, "Rows must be 256 byte aligned");
-        let readback_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("Readback"),
-            size: (output_size * output_size * 4) as u64,
-            usage: BufferUsages::COPY_DST | BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-
         Self {
+            surface,
+            surface_config,
             device,
             queue,
             emu_input_pipeline,
@@ -280,23 +291,81 @@ impl GpuRenderer {
             active_texture_index: 0,
             decay_bind_group,
             render_bind_group,
-            target,
             phosphor_texture,
             phosphor_view,
             uniform_buffer,
             vertex_buffer,
-            readback_buffer,
-            size: output_size,
             instances: Vec::new(),
         }
     }
 
-    pub fn render(
-        &mut self,
-        commands: impl Iterator<Item = BeamStep>,
-        next_frame_tick_count: u64,
-        out: &mut [u32],
-    ) {
+    pub fn resize(&mut self, width: u32, height: u32) {
+        self.surface_config.width = width;
+        self.surface_config.height = height;
+        self.surface.configure(&self.device, &self.surface_config);
+    }
+
+    /// Gets the surface texture for use
+    fn acquire_surface(&mut self) -> Option<SurfaceTexture> {
+        match self.surface.get_current_texture() {
+            CurrentSurfaceTexture::Success(frame) => Some(frame),
+            CurrentSurfaceTexture::Suboptimal(frame) => {
+                self.surface.configure(&self.device, &self.surface_config);
+                Some(frame)
+            }
+            CurrentSurfaceTexture::Outdated | CurrentSurfaceTexture::Lost => {
+                // Skip this frame
+                self.surface.configure(&self.device, &self.surface_config);
+                None
+            }
+            CurrentSurfaceTexture::Timeout | CurrentSurfaceTexture::Occluded => None,
+            other => panic!("failed to acquire surface texture: {other:?}"),
+        }
+    }
+
+    fn output_pass(&self, encoder: &mut CommandEncoder, view: &TextureView, bind_index: usize) {
+        // This is broken out so we can rerun it without the rest of the pipeline
+        let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
+            label: Some("Render"),
+            color_attachments: &[Some(RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: Operations {
+                    // Clear texture
+                    load: LoadOp::Clear(Color::BLACK),
+                    store: StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+
+        pass.set_pipeline(&self.render_pipeline);
+        pass.set_bind_group(0, &self.render_bind_group[bind_index], &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// Rerender the last known phosphor state
+    pub fn present_last(&mut self) {
+        let Some(frame) = self.acquire_surface() else {
+            return;
+        };
+
+        let frame_view = frame.texture.create_view(&Default::default());
+
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        self.output_pass(&mut encoder, &frame_view, self.active_texture_index);
+
+        self.queue.submit([encoder.finish()]);
+        self.queue.present(frame);
+    }
+
+    pub fn render(&mut self, commands: impl Iterator<Item = BeamStep>, next_frame_tick_count: u64) {
+        let Some(frame) = self.acquire_surface() else {
+            return;
+        };
+        let frame_view = frame.texture.create_view(&Default::default());
+
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
@@ -371,72 +440,13 @@ impl GpuRenderer {
             // Drop pass
         }
 
-        // Draw to our output textuer
-        {
-            let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
-                label: Some("Render"),
-                color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &self.target.create_view(&Default::default()),
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: Operations {
-                        // Clear texture
-                        load: LoadOp::Clear(Color::BLACK),
-                        store: StoreOp::Store,
-                    },
-                })],
-                ..Default::default()
-            });
-
-            pass.set_pipeline(&self.render_pipeline);
-            pass.set_bind_group(0, &self.render_bind_group[write_index], &[]);
-            pass.draw(0..3, 0..1);
-
-            // Drop pass
-        }
-
-        // After the render path, copy the texture to our output buffer
-        encoder.copy_texture_to_buffer(
-            self.target.as_image_copy(),
-            TexelCopyBufferInfo {
-                buffer: &self.readback_buffer,
-                layout: TexelCopyBufferLayout {
-                    offset: 0,
-                    // RGBA
-                    // TODO: This won't work with HDR
-                    bytes_per_row: Some(self.size * 4),
-                    rows_per_image: None,
-                },
-            },
-            self.target.size(),
-        );
+        self.output_pass(&mut encoder, &frame_view, write_index);
 
         self.queue.submit([encoder.finish()]);
 
         // Flip the buffers
         self.active_texture_index = write_index;
 
-        // Poll GPU until we have the result
-        let slice = self.readback_buffer.slice(..);
-
-        slice.map_async(MapMode::Read, |result| result.unwrap());
-
-        self.device.poll(PollType::wait_indefinitely()).unwrap();
-
-        {
-            let pixels = slice.get_mapped_range().unwrap();
-
-            // Rearrange pixels and copy to output
-            for (px_out, px_in) in out.iter_mut().zip(pixels.chunks_exact(4)) {
-                // RGBA bytes to minifb 0x00RRGGBB
-                let [r, g, b, _a] = px_in.try_into().unwrap();
-                *px_out = u32::from_be_bytes([0, r, g, b]);
-            }
-
-            // If you don't drop here before the unmap, WGPU will crash
-        }
-
-        // Remove buffer from VRAM
-        self.readback_buffer.unmap();
+        self.queue.present(frame);
     }
 }

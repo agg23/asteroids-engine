@@ -41,9 +41,5 @@ fn fs_main(@builtin(position) position: vec4f) -> @location(0) vec4f {
     // Perform tonemapping
     // The probability of a Poisson distributed electron emission hitting a single eye "element" is:
     let probabilty_of_impact = 1.0 - exp(-EXPOSURE * color);
-
-    // Apply gamma normalization (at 2.2)
-    let output = pow(probabilty_of_impact, vec3f(1.0/2.2));
-
-    return vec4f(output, 1.0);
+    return vec4f(probabilty_of_impact, 1.0);
 }
