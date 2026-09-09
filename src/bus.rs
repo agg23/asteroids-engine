@@ -118,7 +118,7 @@ impl mos6502::memory::Bus for Bus {
             0x4000..0x6000 => self.dvg.read_byte((address - 0x4000) as usize),
             0x6800..=0xFFFF => self.rom[(address - 0x6800) as usize],
             _ => {
-                println!("Out of bounds read {address:04X}");
+                // println!("Out of bounds read {address:04X}");
                 0
             }
         }
@@ -140,7 +140,7 @@ impl mos6502::memory::Bus for Bus {
             }
             0x4000..0x6000 => self.dvg.write_byte((address - 0x4000) as usize, value),
             _ => {
-                println!("Out of bounds write {address:0X}");
+                // println!("Out of bounds write {address:0X}");
             }
         }
     }
