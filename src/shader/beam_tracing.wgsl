@@ -2,10 +2,14 @@
 // Vertex shader converts vector coordinates to the [-1, 1] GPU space
 // Fragment shader renders a constant intensity along the vector
 
-// TODO: What are these?
-// Values are relative to the DISPLAY_RESOLUTION (1024)
 // Gaussian sigma. Beam spot stddev
-const SIGMA: f32 = 0.7;
+// Varies based on DVG intensity
+const SIGMA_MIN: f32 = 0.5;
+const SIGMA_MAX: f32 = 0.9;
+
+// Beam current to drive current is a power law and the power is where "gamma" comes from
+const BEAM_GAMMA: f32 = 2.4;
+
 // How far the Gaussian reaches from the center of the quad, at which point we clip to 0
 const REACH: f32 = 3.0;
 
@@ -43,23 +47,28 @@ fn vs_main(
     // The + 0.5 centers the texel
     let normalized_position = (vec2f(dest) + 0.5) / DISPLAY_RESOLUTION * 2.0 - 1.0;
 
+    // Apply gamma power law against normalized intensity
+    let beam_current = pow(f32(intensity) / 15.0, BEAM_GAMMA);
+
+    // Select actual Gaussian sigma based on incoming current
+    let sigma = mix(SIGMA_MIN, SIGMA_MAX, beam_current);
+
     // Reach on one side of the Gaussian in the normalized coordinate space
-    let normalized_half_reach = REACH * SIGMA * (2.0 / DISPLAY_RESOLUTION);
+    let normalized_half_reach = REACH * sigma * (2.0 / DISPLAY_RESOLUTION);
 
     var out: VsOut;
     // Take our position and move towards the corresponding corner of the quad by our REACH
     // z = 0 (no depth), w = 1 (no perspective)
     out.clip_position = vec4f(normalized_position + corner * normalized_half_reach, 0.0, 1.0);
-    // TODO: Why doesn't this have to be normalized?
     out.local_position = corner * REACH;
-    out.energy = f32(intensity) / 15.0 * f32(active_ticks);
+    out.energy = beam_current * f32(active_ticks) / (2.0 * PI * sigma * sigma);
 
     return out;
 }
 
 @fragment
 fn fs_main(in: VsOut) -> @location(0) f32 {
-    let falloff = exp(-0.5 * dot(in.local_position, in.local_position)) / (2 * PI * SIGMA * SIGMA);
+    let falloff = exp(-0.5 * dot(in.local_position, in.local_position));
     let energy = in.energy * falloff;
     return energy;
 }

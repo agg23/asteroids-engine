@@ -1,7 +1,7 @@
 // Reads from the phosphor texture and renders it
 
 // Scale brightness so it "fits" in range
-const EXPOSURE: f32 = 8.0;
+const EXPOSURE: f32 = 4.0;
 
 // Phosphor emission chromacity in sRGB, normalized to max channel brightness at 1.0
 // Asteroids uses 9300k as its whitepoint, which is at chromacity 0.283, 0.298. Mapping from chromacity to sRGB results in vec3f(0.839193, 1.014020, 1.335080). Normalizing by field produces:
