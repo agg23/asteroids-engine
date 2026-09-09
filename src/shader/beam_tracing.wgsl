@@ -45,7 +45,7 @@ fn vs_main(
     // Normalize from [0, 1024) to [-1, 1]
     // Receiving 1024 and mapping to a total range of 2, starting at -1
     // The + 0.5 centers the texel
-    let normalized_position = (vec2f(dest) + 0.5) / DISPLAY_RESOLUTION * 2.0 - 1.0;
+    let normalized_position = (vec2f(dest) + 0.5) / DVG_RESOLUTION * 2.0 - 1.0;
 
     // Apply gamma power law against normalized intensity
     let beam_current = pow(f32(intensity) / 15.0, BEAM_GAMMA);
@@ -54,7 +54,7 @@ fn vs_main(
     let sigma = mix(SIGMA_MIN, SIGMA_MAX, beam_current);
 
     // Reach on one side of the Gaussian in the normalized coordinate space
-    let normalized_half_reach = REACH * sigma * (2.0 / DISPLAY_RESOLUTION);
+    let normalized_half_reach = REACH * sigma * (2.0 / DVG_RESOLUTION);
 
     var out: VsOut;
     // Take our position and move towards the corresponding corner of the quad by our REACH

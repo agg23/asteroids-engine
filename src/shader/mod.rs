@@ -2,9 +2,11 @@ use wgpu::{Device, ShaderModule, ShaderModuleDescriptor, ShaderSource};
 
 use crate::types::{BeamStep, DrawCommand};
 
-pub const DISPLAY_RESOLUTION: usize = 1024;
+pub const EMULATION_OUTPUT_RESOLUTION: usize = 1024 * 2;
 pub const SUPERSAMPLE_MULTIPLIER: usize = 4;
-pub const RENDER_RESOLUTION: usize = DISPLAY_RESOLUTION * SUPERSAMPLE_MULTIPLIER;
+pub const RENDER_RESOLUTION: usize = EMULATION_OUTPUT_RESOLUTION * SUPERSAMPLE_MULTIPLIER;
+
+pub const DVG_RESOLUTION: usize = 1024;
 
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
@@ -95,7 +97,8 @@ pub struct Shader;
 impl Shader {
     pub fn new(device: &Device, contents: &str) -> ShaderModule {
         let injected_constants = format!(
-            "const DISPLAY_RESOLUTION: f32 = {DISPLAY_RESOLUTION}.0;
+            "const DVG_RESOLUTION: f32 = {DVG_RESOLUTION}.0;
+            const EMULATION_OUTPUT_RESOLUTION: f32 = {EMULATION_OUTPUT_RESOLUTION}.0;
             const SUPERSAMPLE_MULTIPLIER: i32 = {SUPERSAMPLE_MULTIPLIER};"
         );
 

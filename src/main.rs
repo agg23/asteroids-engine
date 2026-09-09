@@ -23,7 +23,7 @@ use crate::{
     gpu::GpuRenderer,
     input::{GamepadInputs, KeyState},
     rom::ROM,
-    shader::DISPLAY_RESOLUTION,
+    shader::EMULATION_OUTPUT_RESOLUTION,
     types::BeamStep,
 };
 
@@ -216,7 +216,10 @@ impl ApplicationHandler for App {
         }
 
         // Should respect DPI/pixel scale
-        let size = PhysicalSize::new(DISPLAY_RESOLUTION as u32, DISPLAY_RESOLUTION as u32);
+        let size = PhysicalSize::new(
+            EMULATION_OUTPUT_RESOLUTION as u32,
+            EMULATION_OUTPUT_RESOLUTION as u32,
+        );
 
         let window = Arc::new(
             event_loop
