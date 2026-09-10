@@ -1,14 +1,14 @@
 use std::sync::Arc;
 
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BlendState, Buffer,
+    Adapter, BindGroup, BindGroupDescriptor, BindGroupEntry, BindingResource, BlendState, Buffer,
     BufferDescriptor, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoder,
     CurrentSurfaceTexture, Device, Extent3d, FragmentState, Instance, InstanceDescriptor, LoadOp,
     Operations, PresentMode, PrimitiveState, PrimitiveTopology, Queue, RenderPassColorAttachment,
     RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, StoreOp,
-    Surface, SurfaceColorSpace, SurfaceConfiguration, SurfaceTexture, Texture, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureUsages, TextureView, VertexBufferLayout, VertexState,
-    VertexStepMode, vertex_attr_array,
+    Surface, SurfaceColorSpace, SurfaceColorSpaces, SurfaceConfiguration, SurfaceTexture, Texture,
+    TextureDescriptor, TextureDimension, TextureFormat, TextureUsages, TextureView,
+    VertexBufferLayout, VertexState, VertexStepMode, vertex_attr_array,
 };
 use winit::window::Window;
 
@@ -32,6 +32,7 @@ const MAX_STEPS: usize = 32768;
 pub struct GpuRenderer {
     surface: Surface<'static>,
     surface_config: SurfaceConfiguration,
+    gpu_adapter: Adapter,
 
     device: Device,
     queue: Queue,
@@ -53,6 +54,8 @@ pub struct GpuRenderer {
     vertex_buffer: Buffer,
 
     instances: Vec<BeamStepInstance>,
+
+    last_hdr_headroom: f32,
 }
 
 impl GpuRenderer {
@@ -71,26 +74,43 @@ impl GpuRenderer {
         let (device, queue) = pollster::block_on(gpu_adapter.request_device(&Default::default()))
             .expect("failed to create GPU device");
 
-        let caps = surface.get_capabilities(&gpu_adapter);
+        let capabilities = surface.get_capabilities(&gpu_adapter);
 
-        // Prefer sRGB
-        let surface_format = caps
-            .formats
-            .iter()
-            .copied()
-            .find(|format| format.is_srgb())
-            .unwrap_or(caps.formats[0]);
+        let use_hdr = capabilities
+            // This is not sRGB (and thus isn't gamma corrected). It's linear
+            .color_spaces(TextureFormat::Rgba16Float)
+            // Pair with linear sRGB output, supporting HDR
+            .contains(SurfaceColorSpaces::EXTENDED_SRGB_LINEAR);
+
+        let (format, color_space) = if use_hdr {
+            (
+                TextureFormat::Rgba16Float,
+                SurfaceColorSpace::ExtendedSrgbLinear,
+            )
+        } else {
+            // Prefer sRGB
+            let format = capabilities
+                .formats
+                .iter()
+                .copied()
+                .find(|format| format.is_srgb())
+                .unwrap_or(capabilities.formats[0]);
+
+            // Auto resolves to plain sRGB for an 8 bit format
+            (format, SurfaceColorSpace::Auto)
+        };
+
+        println!("surface {format:?} / {color_space:?} (hdr: {use_hdr})");
 
         let physical = window.inner_size();
         let surface_config = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            // Auto resolves to plain sRGB for an 8 bit format
-            color_space: SurfaceColorSpace::Auto,
+            format,
+            color_space,
             width: physical.width.max(1),
             height: physical.height.max(1),
             present_mode: PresentMode::AutoNoVsync,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: capabilities.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
@@ -197,7 +217,7 @@ impl GpuRenderer {
                 compilation_options: Default::default(),
                 // This must match the surface we present to
                 targets: &[Some(ColorTargetState {
-                    format: surface_format,
+                    format,
                     blend: None,
                     write_mask: ColorWrites::ALL,
                 })],
@@ -247,6 +267,7 @@ impl GpuRenderer {
                         binding: 0,
                         resource: BindingResource::TextureView(&phosphor_view[i]),
                     },
+                    // TODO: Enable when used
                     // BindGroupEntry {
                     //     binding: 1,
                     //     resource: uniform_buffer.as_entire_binding(),
@@ -265,10 +286,10 @@ impl GpuRenderer {
                         binding: 0,
                         resource: BindingResource::TextureView(&phosphor_view[i]),
                     },
-                    // BindGroupEntry {
-                    //     binding: 1,
-                    //     resource: uniform_buffer.as_entire_binding(),
-                    // },
+                    BindGroupEntry {
+                        binding: 1,
+                        resource: uniform_buffer.as_entire_binding(),
+                    },
                 ],
             })
         });
@@ -283,6 +304,7 @@ impl GpuRenderer {
         Self {
             surface,
             surface_config,
+            gpu_adapter,
             device,
             queue,
             emu_input_pipeline,
@@ -296,6 +318,7 @@ impl GpuRenderer {
             uniform_buffer,
             vertex_buffer,
             instances: Vec::new(),
+            last_hdr_headroom: 0.0,
         }
     }
 
@@ -366,10 +389,21 @@ impl GpuRenderer {
         };
         let frame_view = frame.texture.create_view(&Default::default());
 
+        let hdr_headroom = self
+            .surface
+            .display_hdr_info(&self.gpu_adapter)
+            .tone_map_headroom()
+            .unwrap_or(1.0);
+
+        if hdr_headroom != self.last_hdr_headroom {
+            self.last_hdr_headroom = hdr_headroom;
+            println!("HDR headroom {hdr_headroom:.1}");
+        }
+
         self.queue.write_buffer(
             &self.uniform_buffer,
             0,
-            bytemuck::bytes_of(&SharedUniforms::new(next_frame_tick_count)),
+            bytemuck::bytes_of(&SharedUniforms::new(hdr_headroom)),
         );
 
         self.instances.clear();

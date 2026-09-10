@@ -7,6 +7,8 @@
 const SIGMA_MIN: f32 = 0.5;
 const SIGMA_MAX: f32 = 0.9;
 
+const FULL_BRIGHTNESS_PER_TICK_ENERGY: f32 = 1.0 / (2.0 * PI * SIGMA_MAX * SIGMA_MAX);
+
 // Beam current to drive current is a power law and the power is where "gamma" comes from
 const BEAM_GAMMA: f32 = 2.4;
 
@@ -61,7 +63,9 @@ fn vs_main(
     // z = 0 (no depth), w = 1 (no perspective)
     out.clip_position = vec4f(normalized_position + corner * normalized_half_reach, 0.0, 1.0);
     out.local_position = corner * REACH;
-    out.energy = beam_current * f32(active_ticks) / (2.0 * PI * sigma * sigma);
+
+    // Energy is not in any physically grounded units. Normalize it to our "energy unit" derived from sigma
+    out.energy = beam_current * f32(active_ticks) / (2.0 * PI * sigma * sigma) / FULL_BRIGHTNESS_PER_TICK_ENERGY;
 
     return out;
 }

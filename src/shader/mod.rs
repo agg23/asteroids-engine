@@ -78,16 +78,17 @@ impl BeamStepInstance {
 #[repr(C)]
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SharedUniforms {
-    pub frame_ticks: u64,
+    pub hdr_headroom: f32,
+    // pub frame_ticks: u64,
     // Padd to 16 bytes
-    pub _pad: [u32; 2],
+    pub _pad: [u32; 3],
 }
 
 impl SharedUniforms {
-    pub fn new(frame_ticks: u64) -> Self {
+    pub fn new(hdr_headroom: f32) -> Self {
         SharedUniforms {
-            frame_ticks,
-            _pad: [0; 2],
+            hdr_headroom,
+            _pad: [0; 3],
         }
     }
 }

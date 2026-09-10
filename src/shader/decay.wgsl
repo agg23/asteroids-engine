@@ -10,6 +10,7 @@ const TICKS_PER_FRAME: i32 = NMI_PERIOD_TICKS * 4;
 const TICKS_PER_MS: i32 = 1512;
 
 @group(0) @binding(0) var state_in: texture_2d<f32>;
+// @group(0) @binding(1) var<uniform> uniforms: SharedUniforms;
 
 @vertex
 fn vs_main(
