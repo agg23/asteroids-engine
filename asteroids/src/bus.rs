@@ -34,7 +34,7 @@ impl Bus {
             ram: [0; 0x400],
             rom: rom.program,
             dvg,
-            last_gamepad_inputs: GamepadInputs::new(),
+            last_gamepad_inputs: GamepadInputs::default(),
         }
     }
 

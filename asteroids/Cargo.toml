@@ -1,0 +1,10 @@
+[package]
+name = "asteroids"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+bytemuck.workspace = true
+mos6502 = "0.10.1"
+wgpu.workspace = true
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

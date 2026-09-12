@@ -1,12 +1,13 @@
-[package]
-name = "asteroids"
+[workspace]
+resolver = "3"
+members = ["asteroids", "asteroids_desktop"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
+[workspace.dependencies]
+asteroids = { path = "asteroids" }
 bytemuck = { version = "1.25.2", features = ["derive"] }
-mos6502 = "0.10.1"
 pollster = "1.0.1"
 wgpu = "30.0.1"
-winit = "0.30.13"
-zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

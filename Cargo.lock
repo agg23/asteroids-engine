@@ -110,10 +110,18 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "mos6502",
+ "wgpu",
+ "zip",
+]
+
+[[package]]
+name = "asteroids_desktop"
+version = "0.1.0"
+dependencies = [
+ "asteroids",
  "pollster",
  "wgpu",
  "winit",
- "zip",
 ]
 
 [[package]]

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use asteroids::GamepadInputs;
 use winit::keyboard::KeyCode;
 
 pub struct KeyState {
@@ -38,37 +39,6 @@ impl KeyState {
             hyperspace: self.is_key_down(KeyCode::ShiftLeft),
             p1_start: self.is_key_down(KeyCode::Digit1),
             p2_start: self.is_key_down(KeyCode::Digit2),
-        }
-    }
-}
-
-#[derive(Clone)]
-pub struct GamepadInputs {
-    pub p1_start: bool,
-    pub p2_start: bool,
-
-    pub rotate_left: bool,
-    pub rotate_right: bool,
-
-    pub thrust: bool,
-    pub fire: bool,
-
-    pub hyperspace: bool,
-}
-
-impl GamepadInputs {
-    pub fn new() -> Self {
-        Self {
-            p1_start: false,
-            p2_start: false,
-
-            rotate_left: false,
-            rotate_right: false,
-
-            thrust: false,
-            fire: false,
-
-            hyperspace: false,
         }
     }
 }
