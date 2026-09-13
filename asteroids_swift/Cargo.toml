@@ -1,0 +1,21 @@
+[package]
+name = "asteroids_swift"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "asteroids_swift"
+crate-type = ["staticlib"]
+
+[build-dependencies]
+swift-bridge-build = "0.1"
+
+[dependencies]
+asteroids.workspace = true
+pollster.workspace = true
+swift-bridge = "0.1"
+wgpu.workspace = true
+
+objc2 = "0.6.3"
+objc2-io-surface = "0.3.2"
+objc2-metal = { version = "0.3.2", features = ["objc2-io-surface"] }
